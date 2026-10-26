@@ -53,6 +53,11 @@ def msix_data(path:Path)->dict:
                     fail("invalid MSIX metadata root: "+name)
                 parsed[name]=document
             root=parsed["appxmanifest.xml"]
+            # Validate every member, not only the XML metadata. A damaged EXE
+            # can otherwise be handed to Windows-all-auto as QA_UNSIGNED.
+            corrupt_member=z.testzip()
+            if corrupt_member is not None:
+                fail("MSIX CRC validation failed: "+corrupt_member)
     except (zipfile.BadZipFile,ET.ParseError,KeyError,RuntimeError,OSError) as error:
         fail("invalid MSIX container: "+type(error).__name__)
     identity=next((x for x in root.iter() if x.tag=="Identity" or x.tag.endswith("}Identity")),None)
