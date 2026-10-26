@@ -94,6 +94,25 @@ class GameIntakeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.request()
 
+    def test_rejects_duplicate_manifest_and_proposal_fields(self):
+        cases = (
+            (self.manifest, '{"slug":"arcade-puzzle-game",'
+             '"slug":"arcade-puzzle-game","kind":"game","entry":"main.py"}'),
+            (self.proposal, '{"slug":"arcade-puzzle-game",'
+             '"title":"Arcade Puzzle Game","title":"Arcade Puzzle Game"}'),
+            (self.proposal, '{"slug":"arcade-puzzle-game",'
+             '"title":"Arcade Puzzle Game","metadata":{"safe":1,"safe":2}}'),
+        )
+        for path, payload in cases:
+            with self.subTest(path=path.name, payload=payload):
+                original = path.read_text(encoding="utf-8")
+                try:
+                    path.write_text(payload, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "duplicate JSON field"):
+                        self.request()
+                finally:
+                    path.write_text(original, encoding="utf-8")
+
     def test_cli_creates_only_dry_run_receipt(self):
         output = self.root / "request.json"
         result = subprocess.run([

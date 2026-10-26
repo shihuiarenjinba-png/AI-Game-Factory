@@ -25,10 +25,21 @@ REQUEST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _reject_duplicate_fields(pairs):
+    """Reject ambiguous JSON keys at every nesting level."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
+
+
 def _read_json(path: Path) -> dict:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 32768:
         raise ValueError("missing, linked, or oversized source JSON")
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"),
+                       object_pairs_hook=_reject_duplicate_fields)
     if not isinstance(value, dict):
         raise ValueError("source JSON must be an object")
     return value
