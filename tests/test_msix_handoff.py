@@ -96,6 +96,19 @@ class FactoryTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"invalid MSIX metadata root"):
             create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
 
+    def test_corrupted_executable_crc_holds_before_export(self):
+        # The manifest remains valid while a stored executable byte changes.
+        # A valid SHA-256 of corrupt bytes must never imply MSIX integrity.
+        original=self.package.read_bytes()
+        damaged=original.replace(b"windows test executable",
+                                 b"windows xest executable",1)
+        self.assertNotEqual(damaged,original)
+        self.package.write_bytes(damaged)
+        with self.assertRaisesRegex(ValueError,"MSIX CRC validation failed"):
+            create_handoff(self.root,"demo-product",self.package,
+                           self.root/"exports",SHA)
+        self.assertFalse((self.root/"exports/factory-msix-handoff").exists())
+
     def test_duplicate_bundle_fails(self):
         create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
         with self.assertRaisesRegex(ValueError,"already exists"):
