@@ -28,6 +28,10 @@ class FactoryTransportTests(unittest.TestCase):
         self.package=self.root/"sample.msix"
         with zipfile.ZipFile(self.package,"w") as zipfileout:
             zipfileout.writestr("AppxManifest.xml",XML)
+            zipfileout.writestr("AppxBlockMap.xml",
+                b'<BlockMap xmlns="http://schemas.microsoft.com/appx/2010/blockmap"/>')
+            zipfileout.writestr("[Content_Types].xml",
+                b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
             zipfileout.writestr("demo.exe",b"windows test executable")
 
     def save_approved(self):
@@ -65,6 +69,31 @@ class FactoryTransportTests(unittest.TestCase):
     def test_invalid_msix_fails(self):
         self.package.write_bytes(b"not a msix")
         with self.assertRaisesRegex(ValueError,"invalid MSIX"):
+            create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
+
+    def test_generic_zip_with_only_manifest_is_not_msix(self):
+        # Previously accepted a plain ZIP with an AppxManifest.xml.
+        with zipfile.ZipFile(self.package,"w") as z:
+            z.writestr("AppxManifest.xml",XML)
+            z.writestr("demo.exe",b"not a packaged Windows executable")
+        with self.assertRaisesRegex(ValueError,"required MSIX metadata missing"):
+            create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
+
+    def test_duplicate_casefolded_zip_members_hold(self):
+        # Windows package member names are case-insensitive; never allow
+        # ambiguous manifests that could be interpreted differently.
+        with zipfile.ZipFile(self.package,"a") as z:
+            z.writestr("APPXMANIFEST.XML",XML)
+        with self.assertRaisesRegex(ValueError,"duplicate MSIX ZIP member"):
+            create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
+
+    def test_wrong_blockmap_root_holds(self):
+        with zipfile.ZipFile(self.package,"w") as z:
+            z.writestr("AppxManifest.xml",XML)
+            z.writestr("AppxBlockMap.xml",b"<Package/>")
+            z.writestr("[Content_Types].xml",b"<Types/>")
+            z.writestr("demo.exe",b"test")
+        with self.assertRaisesRegex(ValueError,"invalid MSIX metadata root"):
             create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
 
     def test_duplicate_bundle_fails(self):
