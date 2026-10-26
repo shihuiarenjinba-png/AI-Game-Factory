@@ -25,15 +25,34 @@ def msix_data(path:Path)->dict:
         with zipfile.ZipFile(path) as z:
             entries=z.infolist()
             if not 1 <= len(entries) <= 2000:fail("unsafe MSIX file count")
+            members={}
             for entry in entries:
                 name=entry.filename.replace("\\","/")
-                if (name.startswith("/") or ".." in name.split("/") or
+                key=name.casefold()
+                if (not name or name.startswith("/") or ".." in name.split("/") or
                     entry.file_size>300*1024*1024 or
                     (entry.compress_size and entry.file_size>100*entry.compress_size)):
                     fail("unsafe MSIX ZIP member")
-            found=[e for e in entries if e.filename.lower()=="appxmanifest.xml"]
-            if len(found)!=1 or found[0].file_size>2*1024*1024:fail("AppxManifest.xml unavailable")
-            root=ET.fromstring(z.read(found[0]))
+                if key in members:
+                    fail("duplicate MSIX ZIP member")
+                members[key]=entry
+            # A generic ZIP with a forged AppxManifest is not an MSIX.
+            # MakeAppx emits these mandatory package metadata parts.
+            metadata=(
+                ("appxmanifest.xml","Package"),
+                ("appxblockmap.xml","BlockMap"),
+                ("[content_types].xml","Types"),
+            )
+            parsed={}
+            for name,expected_root in metadata:
+                member=members.get(name)
+                if member is None or not 0<member.file_size<=2*1024*1024:
+                    fail("required MSIX metadata missing: "+name)
+                document=ET.fromstring(z.read(member))
+                if document.tag.rsplit("}",1)[-1]!=expected_root:
+                    fail("invalid MSIX metadata root: "+name)
+                parsed[name]=document
+            root=parsed["appxmanifest.xml"]
     except (zipfile.BadZipFile,ET.ParseError,KeyError,RuntimeError,OSError) as error:
         fail("invalid MSIX container: "+type(error).__name__)
     identity=next((x for x in root.iter() if x.tag=="Identity" or x.tag.endswith("}Identity")),None)
