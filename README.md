@@ -1,58 +1,40 @@
 # AI-Game-Factory
 
-## Purpose
-Independent game development factory. Uses GitHub Actions and OpenAI Codex to
-research public GitHub issue demand signals, create a prototype, run two bounded
-improvement rounds, and repeat. GitHub issues are weak market proxies, NOT sales proof.
+## Current operating model (2026-10-26)
 
-This is a review-gated prototype infrastructure, not a finished autonomous Store publisher.
+This is the **ordinary/2D Windows game Factory**. The 3D pipeline is maintained separately in `3d-game-factory`; Windows applications use `AI-App-Factory`.
 
-## Activation (manual, once per repository)
-1. Review tests and merge the bootstrap Draft PR into main (scheduler requires default branch).
-2. Under Settings -> Secrets and variables -> Actions, create secret OPENAI_API_KEY.
-3. Under Actions -> Variables, create FACTORY_ENABLED with value true.
-4. Under Settings -> Actions -> General, enable GitHub Actions creation of pull requests.
-5. Set a provider-side API usage budget; check Actions job and billing quotas.
-6. Manually dispatch "Factory 15 minute cycle" once and inspect all job logs.
-7. Review the resulting Draft PR; merge only when acceptable.
+**No OpenAI API key or Codex GitHub Action is needed.** Research, design decisions, and code improvements are driven by ChatGPT scheduled tasks using the connected GitHub MCP. GitHub Actions only performs deterministic validation, Windows builds, and gated artifact export. The old `factory-cycle.yml` is a manual, read-only safety/CI entrypoint; it does not invoke an AI model, create products, or push branches. No GitHub Actions CRON is assumed to be a functioning ChatGPT agent.
 
-The Actions CRON runs every 15 minutes, but it may be delayed or dropped.
-The workflow pauses if an unmerged codex/factory-* PR exists, preventing overlap.
-The state in factory/state.json advances only when that human-reviewed PR merges.
-Schedule on the feature branch alone is INACTIVE.
+## Source and review
 
-Stages: research -> build -> improve #1 -> improve #2 -> research next product.
-Products are staged in products/<slug>; proposals are in proposals/<slug>.json.
-No new GitHub repos are created automatically in this first phase.
+- Develop on a `codex/*` work branch; never auto-write `main` or `release`, merge a PR, or submit to Microsoft Store.
+- `factory.py` and `factory/state.json` provide the existing staged research/build/improvement prototype. The state machine and its mock tests are **not evidence of live autonomous generation**.
+- `Repository-Provisioner-game` is the planned local intermediate worker: accept Factory name, slug, request ID, source repository/branch and exact source SHA; build/test a Windows package; obtain and verify already-issued official Microsoft Store identity from an authenticated Partner Center session; return an evidence-backed identity JSON to the correct Factory work branch. It must not guess a new Store ID from MSIX.
+- The approved identity return contract is documented in `Windows-all-auto/docs/OFFICIAL_IDENTITY_RETURN_PROTOCOL.md`. The local worker implementation and full live return are not yet proven.
 
-## Local smoke verification
+## Windows MSIX candidate path
 
-    python -m unittest discover -s tests -v
-    python -m py_compile factory.py
+1. A product must exist under `products/<slug>/` with matching `manifest.json` and `main.py`.
+2. An authenticated operator/worker must verify official Partner Center product identity and write `products/<slug>/store/approved-identity.json` on the authorized work branch using the strict return contract. This file must contain `reviewed=true`, `source=partner_center`, `store_id`, `name`, `publisher`, and `version`.
+3. Real PNG assets are required under `products/<slug>/store/assets/`: `StoreLogo.png`, `Square150.png`, and `Square44.png`.
+4. The Windows `msix-export.yml` workflow runs PyInstaller and MakeAppx, compares the resulting MSIX identity with the approved data, and uploads a `factory-msix-handoff-<slug>` artifact with a checksum and source SHA. The artifact is for Windows-all-auto, **not** a certified Store submission.
+5. Windows-all-auto must verify the actual package and provenance before local QA. A green Linux test alone is insufficient.
 
-- Codex runs with workspace permissions and no GitHub write token.
-- A clean CI runner validates generated candidate files, type, provenance, paths,
-  symlinks, size and test execution (timeouts).
-- A separate write-capable runner only creates a Draft PR; never main commits or merges.
-- The OpenAI key and GitHub write token are not passed to generated products.
-- No actual Windows UI test, commercial licensing verification, installer signing,
-  MSIX, Partner Center upload or Microsoft certification is performed by this repo.
-- Windows-data, Windows-checker, Windows-Automator and Windows-all-auto remain
-  downstream independent systems, currently with unfinished live integration.
-- Windows QA, identity and final commercial gate are mandatory before any sale.
-- All work uses reviewed branches; do not bypass a HOLD.
+The Store ID is assigned by Microsoft Partner Center, not derived from an arbitrary package's PFN/SID. Until the official identity and source/QA evidence are available, the product stays **HOLD**. Signing, real Windows installation/UI QA, WACK, privacy/security declarations, licensing review, and Store submission are separately gated.
 
-## Failure circuit breaker and test isolation
+## Manual verification
 
-After 3 failed scheduled workflow runs within 24 hours the factory refuses further
-AI invocations until the window clears and the operator reviews errors.
-Generated tests execute in a memory/CPU/PID-bounded, network-disabled, non-root,
-read-only Docker container. The clean promotion job never executes generated tests.
+```bash
+python -m unittest discover -s tests -v
+python -m py_compile factory.py scripts/simulate_clock.py
+```
 
-## Quality gates added during follow-up audit
-- The Codex job checks staged AND unstaged tracked changes before any generated artifact is accepted.
-- Generated tests must run at least one test successfully; skips and expected failures require review.
-- Product code cannot silently import process/network/system modules or call dynamic exec/eval.
-- Improvements must modify actual code and regression tests, and cannot silently delete existing files.
-- Pull request promotion stages only the expected state and product/proposal directory.
-- The scheduler still requires merge into the default branch, OpenAI credentials and opt-in variable.
+The following workflows are available for **manual validation**, not paid AI generation:
+
+- `factory-autoloop.yml`: source/contract validation using GitHub Actions.
+- `factory-cycle.yml`: retired legacy cycle replaced with a read-only validation gate.
+- `factory-ci.yml`: regression suite.
+- `msix-export.yml`: Windows MSIX export only when official identity and assets exist.
+
+See `docs/MSIX_HANDOFF.md` for downstream artifact format. Product code, Windows install tests, Store identity retrieval and a full Factory-to-Windows-all-auto-to-local end-to-end test must be independently evidenced before reporting completion.
