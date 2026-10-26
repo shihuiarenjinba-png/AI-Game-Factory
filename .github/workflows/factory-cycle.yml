@@ -1,0 +1,33 @@
+name: Factory legacy cycle safe validation (no AI API)
+on:
+  workflow_dispatch:
+
+# Historical Codex generation was deliberately retired. ChatGPT scheduled
+# tasks perform reasoning via the GitHub connector, not GitHub Actions.
+permissions:
+  contents: read
+
+concurrency:
+  group: factory-game-legacy-validation
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Factory code and packaging contracts
+        run: |
+          python -m compileall -q factory.py tools tests
+          python -m unittest discover -s tests -v
+      - name: Report manual validation only
+        run: |
+          echo "No AI inference, repository creation, package submission, or PR writes occur here."
+          echo "ChatGPT GitHub MCP controls reviewed codex/* work branches."
+          echo "Windows MSIX export and Windows-all-auto intake are separate gated workflows."
