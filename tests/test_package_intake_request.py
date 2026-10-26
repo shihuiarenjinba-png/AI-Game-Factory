@@ -81,6 +81,16 @@ class GameIntakeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.request(request_id="../../other")
 
+    def test_request_id_matches_live_provisioner_length_contract(self):
+        # The executable Provisioner Job.validate requires 4..128 characters.
+        # Previously Factory emitted 1..3 character IDs that later failed HOLD.
+        for value in ("a", "ab", "abc", "a" * 129):
+            with self.subTest(request_id=value), self.assertRaisesRegex(ValueError, "request_id"):
+                self.request(request_id=value)
+        for value in ("abcd", "a" * 128):
+            with self.subTest(request_id=value):
+                self.assertEqual(self.request(request_id=value)["request_id"], value)
+
     def test_rejects_control_and_blank_titles(self):
         for title in (" ", "bad\nname", "fake\u202eexe", " leading"):
             self.proposal.write_text(json.dumps({

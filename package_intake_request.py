@@ -21,7 +21,7 @@ ACTIONS = [
     "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN",
 ]
 SLUG = re.compile(r"^[a-z][a-z0-9-]{3,39}$")
-REQUEST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+REQUEST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{3,127}$")
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 
