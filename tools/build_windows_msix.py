@@ -14,39 +14,44 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-NAME=re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{2,80}$")
-VERSION=re.compile(r"^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$")
+try:
+    from .approved_identity import validate_approved_identity
+except ImportError:  # Direct invocation: python tools/build_windows_msix.py
+    from approved_identity import validate_approved_identity
+
+SLUG=re.compile(r"^[a-z][a-z0-9-]{3,39}$")
 ASSETS=("StoreLogo.png","Square150.png","Square44.png")
 NS="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
 UAP="http://schemas.microsoft.com/appx/manifest/uap/windows10"
 RESCAP="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
 
 def verify_inputs(root:Path,slug:str)->tuple[Path,dict]:
+    if not isinstance(slug,str) or not SLUG.fullmatch(slug):
+        raise ValueError("invalid product slug")
+    if (root/"products").is_symlink():
+        raise ValueError("linked product source directory")
     product=root/"products"/slug
     if not product.is_dir() or product.is_symlink():
         raise ValueError("product source directory unavailable")
+    if (product/"manifest.json").is_symlink():
+        raise ValueError("linked product manifest")
     manifest=json.loads((product/"manifest.json").read_text(encoding="utf-8"))
     if manifest.get("slug")!=slug or manifest.get("entry")!="main.py":
         raise ValueError("product manifest not approved for executable build")
     approved=product/"store/approved-identity.json"
-    if not approved.is_file():
+    if approved.is_symlink() or not approved.is_file():
         raise ValueError("Store Identity missing; do not invent")
-    cfg=json.loads(approved.read_text(encoding="utf-8"))
-    if (cfg.get("reviewed") is not True or cfg.get("source")!="partner_center" or
-        not isinstance(cfg.get("store_id"),str) or not cfg["store_id"].strip()):
-        raise ValueError("Partner Center Identity not verified")
-    for field in ("name","publisher","version"):
-        if not isinstance(cfg.get(field),str) or not cfg[field]:
-            raise ValueError("Missing verified "+field)
-    if not NAME.fullmatch(cfg["name"]) or not VERSION.fullmatch(cfg["version"]):
-        raise ValueError("Invalid Name or Version")
+    cfg=validate_approved_identity(json.loads(approved.read_text(encoding="utf-8")))
+    if (product/"store").is_symlink() or (product/"store/assets").is_symlink():
+        raise ValueError("linked Store assets directory")
     for file in ASSETS:
         path=product/"store/assets"/file
         if path.is_symlink() or not path.is_file() or path.stat().st_size>4*1024*1024:
             raise ValueError("Approved Store asset missing: "+file)
         if path.open("rb").read(8)!=b"\x89PNG\r\n\x1a\n":
             raise ValueError("Store asset is not PNG: "+file)
-    if not (product/"main.py").is_file():raise ValueError("main.py absent")
+    if (product/"main.py").is_symlink() or not (product/"main.py").is_file():
+        raise ValueError("main.py absent or linked")
     return product,cfg
 
 def appx_manifest(identity:dict,executable:str)->bytes:
@@ -60,7 +65,7 @@ def appx_manifest(identity:dict,executable:str)->bytes:
       "Version":identity["version"],"ProcessorArchitecture":"x64"})
     props=ET.SubElement(root,tag(NS,"Properties"))
     ET.SubElement(props,tag(NS,"DisplayName")).text=identity.get("display_name",identity["name"])
-    ET.SubElement(props,tag(NS,"PublisherDisplayName")).text=identity.get("publisher_display_name","OkinawaDesktopTools")
+    ET.SubElement(props,tag(NS,"PublisherDisplayName")).text=identity.get("publisher_display_name",identity["name"])
     ET.SubElement(props,tag(NS,"Logo")).text="Assets\\StoreLogo.png"
     resources=ET.SubElement(root,tag(NS,"Resources"))
     ET.SubElement(resources,tag(NS,"Resource"),{"Language":"en-us"})
