@@ -65,42 +65,103 @@ def msix_data(path:Path)->dict:
     fields.update(package_sha256=digest.hexdigest(),package_bytes=path.stat().st_size)
     return fields
 
-def create_handoff(repo_root:Path,slug:str,package:Path,output:Path,source_sha:str)->dict:
+def approved_correlation(approved:dict,kind:str,source_sha:str,factory_head_sha:str)->dict:
+    """Bind the original immutable GAME request to a separate MSIX build HEAD.
+
+    The approved JSON is written only after Provisioner CAS against the
+    source branch. Its package_sha256 is the *pre-Identity* local package,
+    never the new MSIX digest.
+    """
+    if kind!="game":
+        fail("unsupported Factory handoff lane")
+    if not isinstance(source_sha,str) or not SHA40.fullmatch(source_sha):
+        fail("invalid Git source commit")
+    if not isinstance(factory_head_sha,str) or not SHA40.fullmatch(factory_head_sha):
+        fail("invalid Factory build HEAD")
+    if factory_head_sha==source_sha:
+        fail("Identity return/build HEAD must differ from immutable source")
+    exact={
+        "product_type":"GAME",
+        "source_factory":"AI-Game-Factory",
+        "source_repository":OWNER+"/AI-Game-Factory",
+        "source_sha":source_sha,
+        "verified_source_sha":source_sha,
+    }
+    for field,value in exact.items():
+        if approved.get(field)!=value:
+            fail("approved immutable provenance mismatch: "+field)
+    request_id=approved.get("request_id")
+    if not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{3,127}",request_id):
+        fail("approved request_id missing or malformed")
+    branch=approved.get("source_branch")
+    if (not isinstance(branch,str) or
+        not re.fullmatch(r"codex/[A-Za-z0-9._/-]+",branch) or
+        ".." in branch or "//" in branch or branch.endswith(("/", ".")) or
+        any(part.startswith(".") or part.endswith(".lock") for part in branch.split("/"))):
+        fail("approved source_branch missing or unsafe")
+    local_sha=approved.get("package_sha256")
+    if not isinstance(local_sha,str) or not re.fullmatch(r"[a-f0-9]{64}",local_sha):
+        fail("approved local package SHA-256 missing")
+    store_id=approved.get("store_id")
+    if not isinstance(store_id,str) or not re.fullmatch(r"[A-Za-z0-9]{8,32}",store_id):
+        fail("approved Store ID missing or malformed")
+    for field in ("name","publisher","version","package_family_name","package_sid",
+                  "verified_by","evidence_url"):
+        if not isinstance(approved.get(field),str) or not approved[field].strip():
+            fail("approved official Identity provenance missing: "+field)
+    if not re.fullmatch(r"[A-Za-z0-9._-]+_[a-z0-9]{13}",approved["package_family_name"]):
+        fail("approved package family name malformed")
+    if not re.fullmatch(r"S-1-15-2(?:-\\d+){7}",approved["package_sid"]):
+        fail("approved package SID malformed")
+    return {
+        "request_id":request_id,
+        "product_type":"GAME",
+        "source_factory":"AI-Game-Factory",
+        "source_branch":branch,
+        "expected_head_sha":source_sha,
+        "factory_head_sha":factory_head_sha,
+        "store_id":store_id,
+        "preidentity_package_sha256":local_sha,
+    }
+
+
+def create_handoff(repo_root:Path,slug:str,package:Path,output:Path,
+                   source_sha:str,factory_head_sha:str)->dict:
     if not isinstance(slug,str) or not SLUG.fullmatch(slug):fail("invalid product slug")
-    if not SHA40.fullmatch(str(source_sha)):fail("invalid Git source commit")
     config=json.loads((repo_root/"factory/config.json").read_text(encoding="utf-8"))
     kind=config.get("kind")
-    if kind not in ("app","game"):fail("factory app/game kind missing")
+    if kind!="game":fail("GAME Factory kind missing")
     manifest_path=repo_root/"products"/slug/"manifest.json"
     app_manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
     if app_manifest.get("slug")!=slug or app_manifest.get("kind")!=kind:
         fail("product manifest / factory mismatch")
     approved_path=repo_root/"products"/slug/"store/approved-identity.json"
-    if not approved_path.is_file():fail("official Identity approval input missing")
+    if approved_path.is_symlink() or not approved_path.is_file() or approved_path.stat().st_size>32768:
+        fail("official Identity approval input missing or unsafe")
     approved=json.loads(approved_path.read_text(encoding="utf-8"))
-    if (approved.get("reviewed") is not True or
-        approved.get("source")!="partner_center" or
-        not isinstance(approved.get("store_id"),str) or
-        not approved["store_id"].strip()):
+    if (not isinstance(approved,dict) or approved.get("reviewed") is not True or
+        approved.get("source")!="partner_center"):
         fail("Partner Center approval not recorded")
+    correlation=approved_correlation(approved,kind,source_sha,factory_head_sha)
     actual=msix_data(package)
     for field in ("name","publisher","version"):
         if approved.get(field)!=actual[field]:fail("MSIX identity differs from approved "+field)
-    basename="AI-App-Factory" if kind=="app" else "AI-Game-Factory"
     result={
-       "schema_version":1,"source_repository":"https://github.com/"+OWNER+"/"+basename,
-       "source_sha":source_sha,"type":kind,"slug":slug,
+       "schema_version":1,
+       "source_repository":"https://github.com/"+OWNER+"/AI-Game-Factory",
+       "source_sha":source_sha,"type":"game","slug":slug,
        "package":"package.msix","status":"QA_UNSIGNED",
        "package_sha256":actual["package_sha256"],
        "package_bytes":actual["package_bytes"],
        "identity":{k:actual[k] for k in ("name","publisher","version")},
+       **correlation,
     }
     dest=output/"factory-msix-handoff"
     if dest.exists():fail("output artifact already exists")
     dest.mkdir(parents=True)
     try:
         shutil.copyfile(package,dest/"package.msix")
-        (dest/"handoff.json").write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
+        (dest/"handoff.json").write_text(json.dumps(result,indent=2)+"\\n",encoding="utf-8")
         if msix_data(dest/"package.msix")["package_sha256"]!=actual["package_sha256"]:
             fail("copied MSIX hash mismatch")
     except BaseException:
@@ -118,8 +179,11 @@ def main(argv=None):
     try:
         head=subprocess.check_output(["git","rev-parse","HEAD"],
             cwd=args.repository_root,encoding="utf-8",timeout=8).strip()
+        approved_path=args.repository_root/"products"/args.slug/"store/approved-identity.json"
+        approved=json.loads(approved_path.read_text(encoding="utf-8"))
+        source_sha=approved.get("source_sha")
         print(json.dumps(create_handoff(args.repository_root,args.slug,args.msix,
-            args.output,head),ensure_ascii=False))
+            args.output,source_sha,head),ensure_ascii=False))
         return 0
     except (OSError,ValueError,subprocess.CalledProcessError,subprocess.TimeoutExpired,KeyError) as exc:
         print("HOLD:",type(exc).__name__,str(exc)[:160],file=sys.stderr)
