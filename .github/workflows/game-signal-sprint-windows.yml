@@ -3,9 +3,12 @@ on:
   push:
     branches:
       - codex/game-signal-sprint-playable-20261027
+      - codex/game-signal-sprint-intake-20261027
     paths:
       - "products/signal-sprint/**"
       - "proposals/signal-sprint.json"
+      - "package_intake_request.py"
+      - "tests/test_package_intake_request.py"
       - ".github/workflows/game-signal-sprint-windows.yml"
   workflow_dispatch:
 permissions:
@@ -43,8 +46,17 @@ jobs:
           $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
           if ($bytes.Length -lt 100000 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Invalid PE candidate' }
           $digest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $requestId = "game-signal-sprint-$env:SOURCE_SHA"
+          python package_intake_request.py --slug signal-sprint --request-id $requestId --source-sha $env:SOURCE_SHA --source-branch $env:SOURCE_BRANCH --output dist/game/provisioner-request.json
+          if ($LASTEXITCODE -ne 0) { throw "Factory GAME intake request generation failed" }
+          $intake = Get-Content -LiteralPath dist/game/provisioner-request.json -Raw | ConvertFrom-Json
+          if ($intake.request_id -ne $requestId -or $intake.product_type -ne "GAME" -or $intake.source_factory -ne "AI-Game-Factory" -or $intake.source_repository -ne $env:SOURCE_REPOSITORY -or $intake.source_branch -ne $env:SOURCE_BRANCH -or $intake.source_sha -ne $env:SOURCE_SHA -or $intake.slug -ne "signal-sprint" -or $intake.dry_run -ne $true) {
+            throw "GAME Provisioner intake contract mismatch"
+          }
           $record = [ordered]@{
             schema_version = 1
+            request_id = $requestId
+            provisioner_request = "provisioner-request.json"
             product_type = 'GAME'
             source_factory = 'AI-Game-Factory'
             source_repository = $env:SOURCE_REPOSITORY
@@ -67,5 +79,6 @@ jobs:
           path: |
             dist/game/SignalSprint.exe
             dist/game/provenance.json
+            dist/game/provisioner-request.json
           if-no-files-found: error
           retention-days: 5
