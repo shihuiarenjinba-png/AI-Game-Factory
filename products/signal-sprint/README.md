@@ -3,7 +3,7 @@
 Run on Windows with Python 3.12+: `python main.py`.
 Collect all three gold energy cells and reach EXIT in 30 moves. Use arrows,
 WASD or click an adjacent tile. Walls block movement. R restarts; S saves the
-round locally; L restores it. The language button switches English/Japanese.
+round locally; L restores it. U undoes one successful move, including a\ncollected cell or a losing move; restart/load clears undo history. The language\nbutton switches English/Japanese.
 
 Headless tests: `python -m unittest discover -s tests -p 'test_*.py' -v`.
 
