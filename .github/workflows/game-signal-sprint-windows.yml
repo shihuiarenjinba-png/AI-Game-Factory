@@ -4,6 +4,7 @@ on:
     branches:
       - codex/game-signal-sprint-playable-20261027
       - codex/game-signal-sprint-intake-20261027
+      - codex/game-signal-sprint-undo-20261027
     paths:
       - "products/signal-sprint/**"
       - "proposals/signal-sprint.json"
