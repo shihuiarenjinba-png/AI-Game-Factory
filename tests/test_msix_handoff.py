@@ -23,7 +23,8 @@ class FactoryTransportTests(unittest.TestCase):
         (self.prod/"store").mkdir(parents=True)
         (self.prod/"manifest.json").write_text(json.dumps({"slug":"demo-product","kind":self.kind}))
         self.approved={"reviewed":True,"source":"partner_center","store_id":"9PTESTING",
-            "name":"OkinawaDesktopTools.Demo","publisher":"CN=TEST","version":"1.0.0.0"}
+            "name":"OkinawaDesktopTools.Demo","publisher":"CN=TEST","version":"1.0.0.0",
+            "verified_by":"test-operator","evidence_url":"https://partner.microsoft.com/dashboard/products/example"}
         self.save_approved()
         self.package=self.root/"sample.msix"
         with zipfile.ZipFile(self.package,"w") as zipfileout:
@@ -113,5 +114,19 @@ class FactoryTransportTests(unittest.TestCase):
         create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
         with self.assertRaisesRegex(ValueError,"already exists"):
             create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
+
+    def test_missing_verifier_never_exports_package(self):
+        self.approved.pop("verified_by")
+        self.save_approved()
+        with self.assertRaisesRegex(ValueError,"verifier"):
+            create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
+        self.assertFalse((self.root/"exports").exists())
+
+    def test_untrusted_evidence_never_exports_package(self):
+        self.approved["evidence_url"]="https://partner.microsoft.com.evil.example/"
+        self.save_approved()
+        with self.assertRaisesRegex(ValueError,"untrusted"):
+            create_handoff(self.root,"demo-product",self.package,self.root/"exports",SHA)
+        self.assertFalse((self.root/"exports").exists())
 
 if __name__=="__main__":unittest.main()
