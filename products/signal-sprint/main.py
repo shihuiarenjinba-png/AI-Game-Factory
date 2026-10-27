@@ -24,6 +24,7 @@ class Game:
     def restart(self):
         self.position = START
         self.collected = set()
+        self._history = []
         self.turns = 0
         self.status = "PLAYING"
         self.message = "Collect three cells, then reach EXIT."
@@ -36,6 +37,7 @@ class Game:
                 or target in WALLS):
             self.message = "Blocked. Choose another route."
             return False
+        self._history.append((self.position, frozenset(self.collected), self.turns, self.status))
         self.position = target
         self.turns += 1
         if target in CELLS:
@@ -48,6 +50,16 @@ class Game:
             self.message = "EXIT locked: collect all three cells first."
         else:
             self.message = "Find the shortest safe route."
+        return True
+
+    def undo(self):
+        """Reverse one successful move, including collection and game-over state."""
+        if not self._history:
+            self.message = "No move to undo."
+            return False
+        self.position, collected, self.turns, self.status = self._history.pop()
+        self.collected = set(collected)
+        self.message = "Move undone. Choose your next step."
         return True
 
     def snapshot(self):
@@ -81,6 +93,7 @@ class Game:
             raise ValueError("Inconsistent save")
         self.position, self.collected = pos, set(got)
         self.turns, self.status = turns, status
+        self._history = []  # Save v1 has no history; never undo into another session.
         self.message = "Saved round loaded. Press R to restart after game over."
 
 
@@ -126,10 +139,10 @@ def launch():
     labels = {
         "EN": ("SIGNAL SPRINT", "Collect 3 energy cells, then reach EXIT.",
                "Arrows / WASD / click adjacent tile", "Moves left", "Cells",
-               "Restart (R)", "Save (S)", "Load (L)", "日本語"),
+               "Restart (R)", "Undo (U)", "Save (S)", "Load (L)", "日本語"),
         "JP": ("SIGNAL SPRINT", "3つのエネルギーを集めて出口に到達しよう。",
                "矢印 / WASD / 隣のマスをクリック", "残り手数", "回収",
-               "最初から (R)", "保存 (S)", "読込 (L)", "English"),
+               "最初から (R)", "1手戻す (U)", "保存 (S)", "読込 (L)", "English"),
     }
     heading = tk.Label(root, bg="#101827", fg="#e9f4ff",
                        font=("Segoe UI", 26, "bold"))
@@ -197,6 +210,10 @@ def launch():
         game.restart()
         draw()
 
+    def undo():
+        game.undo()
+        draw()
+
     def save():
         try:
             save_game(game)
@@ -216,7 +233,7 @@ def launch():
         language[0] = "JP" if language[0] == "EN" else "EN"
         draw()
 
-    for action in (restart, save, load, toggle):
+    for action in (restart, undo, save, load, toggle):
         button = tk.Button(panel, command=action, bg="#24577d", fg="white",
                            activebackground="#367aa7", activeforeground="white",
                            font=("Segoe UI", 12, "bold"), relief="flat",
@@ -229,6 +246,8 @@ def launch():
             move(*DIRECTIONS[event.keysym])
         elif event.keysym.lower() == "r":
             restart()
+        elif event.keysym.lower() == "u":
+            undo()
         elif event.keysym.lower() == "s":
             save()
         elif event.keysym.lower() == "l":

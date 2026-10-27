@@ -52,6 +52,10 @@ class Smoke(unittest.TestCase):
             self.assertTrue(game.move(*step))
         self.assertEqual(game.status, "WON")
         self.assertFalse(game.move(1, 0))
+        self.assertTrue(game.undo())
+        self.assertEqual(game.status, "PLAYING")
+        self.assertTrue(game.move(*solution[-1]))
+        self.assertEqual(game.status, "WON")
 
     def test_loss_and_retry(self):
         game = Game()
@@ -62,6 +66,44 @@ class Smoke(unittest.TestCase):
         self.assertFalse(game.move(1, 0))
         game.restart()
         self.assertEqual(game.status, "PLAYING")
+
+    def test_undo_restores_collected_cell_and_turn(self):
+        game = Game()
+        self.assertFalse(game.undo())
+        self.assertEqual(game.turns, 0)
+        self.assertTrue(game.move(1, 0))
+        for _ in range(5):
+            self.assertTrue(game.move(0, 1))
+        self.assertIn((1, 5), game.collected)
+        self.assertTrue(game.undo())
+        self.assertNotIn((1, 5), game.collected)
+        self.assertEqual((game.position, game.turns, game.status), ((1, 4), 5, "PLAYING"))
+        self.assertTrue(game.move(0, 1))
+        self.assertIn((1, 5), game.collected)
+
+    def test_undo_recovers_from_loss_and_restart_clears_history(self):
+        game = Game()
+        for _ in range(MAX_TURNS // 2):
+            self.assertTrue(game.move(1, 0))
+            self.assertTrue(game.move(-1, 0))
+        self.assertEqual(game.status, "LOST")
+        self.assertTrue(game.undo())
+        self.assertEqual((game.status, game.turns), ("PLAYING", MAX_TURNS - 1))
+        game.restart()
+        self.assertFalse(game.undo())
+        self.assertEqual((game.position, game.turns), (START, 0))
+
+    def test_load_discards_undo_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "save.json"
+            game = Game()
+            self.assertTrue(game.move(1, 0))
+            save_game(game, path)
+            self.assertTrue(game.move(1, 0))
+            load_game(game, path)
+            self.assertEqual((game.position, game.turns), ((1, 0), 1))
+            self.assertFalse(game.undo())
+            self.assertEqual((game.position, game.turns), ((1, 0), 1))
 
     def test_save_load(self):
         with tempfile.TemporaryDirectory() as folder:

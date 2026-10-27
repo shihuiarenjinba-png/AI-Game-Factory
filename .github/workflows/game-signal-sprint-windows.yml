@@ -4,10 +4,12 @@ on:
     branches:
       - codex/game-signal-sprint-playable-20261027
       - codex/game-signal-sprint-intake-20261027
+      - codex/game-signal-sprint-undo-20261027
     paths:
       - "products/signal-sprint/**"
       - "proposals/signal-sprint.json"
       - "package_intake_request.py"
+      - "scripts/build-windows.ps1"
       - "tests/test_package_intake_request.py"
       - ".github/workflows/game-signal-sprint-windows.yml"
   workflow_dispatch:
@@ -29,10 +31,9 @@ jobs:
           python-version: "3.12"
       - name: Headless gameplay tests
         run: python -m unittest discover -s products/signal-sprint/tests -p "test_*.py" -v
-      - name: Install pinned Windows EXE builder
-        run: python -m pip install --disable-pip-version-check "pyinstaller==6.16.0"
-      - name: Build unsigned Windows executable
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name SignalSprint --distpath dist/game --workpath dist/work --specpath dist/spec products/signal-sprint/main.py
+      - name: Build real unsigned GAME EXE using local Provisioner entrypoint
+        shell: pwsh
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/build-windows.ps1
       - name: Verify PE header and create SHA provenance
         shell: pwsh
         env:
