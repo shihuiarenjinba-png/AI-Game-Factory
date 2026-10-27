@@ -11,6 +11,11 @@ import sys
 import xml.etree.ElementTree as ET
 import zipfile
 
+try:
+    from .approved_identity import validate_approved_identity
+except ImportError:  # Direct invocation: python tools/msix_handoff.py
+    from approved_identity import validate_approved_identity
+
 SLUG=re.compile(r"^[a-z][a-z0-9-]{3,39}$")
 SHA40=re.compile(r"^[a-f0-9]{40}$")
 OWNER="shihuiarenjinba-png"
@@ -81,13 +86,9 @@ def create_handoff(repo_root:Path,slug:str,package:Path,output:Path,source_sha:s
     if app_manifest.get("slug")!=slug or app_manifest.get("kind")!=kind:
         fail("product manifest / factory mismatch")
     approved_path=repo_root/"products"/slug/"store/approved-identity.json"
-    if not approved_path.is_file():fail("official Identity approval input missing")
-    approved=json.loads(approved_path.read_text(encoding="utf-8"))
-    if (approved.get("reviewed") is not True or
-        approved.get("source")!="partner_center" or
-        not isinstance(approved.get("store_id"),str) or
-        not approved["store_id"].strip()):
-        fail("Partner Center approval not recorded")
+    if approved_path.is_symlink() or not approved_path.is_file():
+        fail("official Identity approval input missing")
+    approved=validate_approved_identity(json.loads(approved_path.read_text(encoding="utf-8")))
     actual=msix_data(package)
     for field in ("name","publisher","version"):
         if approved.get(field)!=actual[field]:fail("MSIX identity differs from approved "+field)
