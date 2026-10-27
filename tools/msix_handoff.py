@@ -111,7 +111,7 @@ def approved_correlation(approved:dict,kind:str,source_sha:str,factory_head_sha:
             fail("approved official Identity provenance missing: "+field)
     if not re.fullmatch(r"[A-Za-z0-9._-]+_[a-z0-9]{13}",approved["package_family_name"]):
         fail("approved package family name malformed")
-    if not re.fullmatch(r"S-1-15-2(?:-\\d+){7}",approved["package_sid"]):
+    if not re.fullmatch(r"S-1-15-2(?:-\d+){7}",approved["package_sid"]):
         fail("approved package SID malformed")
     return {
         "request_id":request_id,
@@ -161,7 +161,7 @@ def create_handoff(repo_root:Path,slug:str,package:Path,output:Path,
     dest.mkdir(parents=True)
     try:
         shutil.copyfile(package,dest/"package.msix")
-        (dest/"handoff.json").write_text(json.dumps(result,indent=2)+"\\n",encoding="utf-8")
+        (dest/"handoff.json").write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
         if msix_data(dest/"package.msix")["package_sha256"]!=actual["package_sha256"]:
             fail("copied MSIX hash mismatch")
     except BaseException:
