@@ -52,6 +52,10 @@ class Smoke(unittest.TestCase):
             self.assertTrue(game.move(*step))
         self.assertEqual(game.status, "WON")
         self.assertFalse(game.move(1, 0))
+        self.assertTrue(game.undo())
+        self.assertEqual(game.status, "PLAYING")
+        self.assertTrue(game.move(*solution[-1]))
+        self.assertEqual(game.status, "WON")
 
     def test_loss_and_retry(self):
         game = Game()
