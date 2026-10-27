@@ -21,7 +21,8 @@ ACTIONS = [
     "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN",
 ]
 SLUG = re.compile(r"^[a-z][a-z0-9-]{3,39}$")
-REQUEST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+REQUEST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{3,127}$")
+GAME_WORK_BRANCH = re.compile(r"^codex/[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$")
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -34,7 +35,8 @@ def _read_json(path: Path) -> dict:
     return value
 
 
-def build_request(root: Path, slug: str, request_id: str, source_sha: str) -> dict:
+def build_request(root: Path, slug: str, request_id: str, source_sha: str,
+                  source_branch: str = BRANCH) -> dict:
     """Create the exact 12-field v1.0 contract accepted by package_job.py."""
     if not isinstance(slug, str) or not SLUG.fullmatch(slug):
         raise ValueError("invalid GAME slug")
@@ -43,6 +45,11 @@ def build_request(root: Path, slug: str, request_id: str, source_sha: str) -> di
     if (not isinstance(source_sha, str) or not SHA40.fullmatch(source_sha)
             or source_sha == "0" * 40):
         raise ValueError("real lower-case 40-digit source SHA required")
+    if (not isinstance(source_branch, str) or not GAME_WORK_BRANCH.fullmatch(source_branch)
+            or ".." in source_branch or "//" in source_branch
+            or source_branch.endswith(("/", "."))
+            or any(part.startswith(".") or part.endswith(".lock") for part in source_branch.split("/"))):
+        raise ValueError("unsafe GAME source_branch")
     if (root / "products").is_symlink() or (root / "proposals").is_symlink():
         raise ValueError("linked Factory source directory")
     product = root / "products" / slug
@@ -69,7 +76,7 @@ def build_request(root: Path, slug: str, request_id: str, source_sha: str) -> di
         "product_type": "GAME",
         "source_factory": FACTORY,
         "source_repository": OWNER + "/" + FACTORY,
-        "source_branch": BRANCH,
+        "source_branch": source_branch,
         "source_sha": source_sha,
         "slug": slug,
         "display_name": title,
@@ -85,10 +92,12 @@ def main(argv=None) -> int:
     parser.add_argument("--slug", required=True)
     parser.add_argument("--request-id", required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--source-branch", default=BRANCH)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
-        payload = build_request(args.root, args.slug, args.request_id, args.source_sha)
+        payload = build_request(args.root, args.slug, args.request_id, args.source_sha,
+                                args.source_branch)
         encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         if args.output:
             if args.output.is_symlink() or not args.output.parent.is_dir():

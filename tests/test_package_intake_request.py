@@ -107,6 +107,35 @@ class GameIntakeTests(unittest.TestCase):
         self.assertEqual(set(p.name for p in self.root.iterdir()),
                          {"products", "proposals", "request.json"})
 
+    def test_independent_game_branch_round_trip(self):
+        branch = "codex/game-signal-sprint-intake-20261027"
+        request = build_request(self.root, self.slug, "game-signal-sprint-" + "a" * 40,
+                                "a" * 40, source_branch=branch)
+        self.assertEqual(request["source_branch"], branch)
+        self.assertEqual(request["product_type"], "GAME")
+        self.assertEqual(request["source_sha"], "a" * 40)
+        self.assertTrue(request["dry_run"])
+        output = self.root / "request.json"
+        result = subprocess.run([
+            sys.executable, "package_intake_request.py",
+            "--root", str(self.root), "--slug", self.slug,
+            "--request-id", "game-signal-sprint-" + "a" * 40,
+            "--source-sha", "a" * 40, "--source-branch", branch,
+            "--output", str(output),
+        ], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(output.read_text(encoding="utf-8")), request)
+
+    def test_rejects_unsafe_game_branches_and_short_request_ids(self):
+        for branch in ("main", "release", "codex/../main", "codex//bad",
+                       "codex/.hidden", "codex/evil.lock", "codex/"):
+            with self.subTest(branch=branch), self.assertRaises(ValueError):
+                build_request(self.root, self.slug, "game-request-001", "a" * 40,
+                              source_branch=branch)
+        for request_id in ("x", "ab", "abc"):
+            with self.subTest(request_id=request_id), self.assertRaises(ValueError):
+                self.request(request_id=request_id)
+
     def test_cli_refuses_symlink_output(self):
         target = self.root / "protected.json"
         target.write_text("protected", encoding="utf-8")
