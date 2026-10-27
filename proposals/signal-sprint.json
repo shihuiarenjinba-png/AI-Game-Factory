@@ -1,0 +1,16 @@
+{
+  "slug": "signal-sprint",
+  "title": "Signal Sprint - Offline Route Puzzle",
+  "customer_problem": "A small offline route-planning game with short, replayable puzzle rounds.",
+  "audience": "Casual Windows players seeking a keyboard-friendly offline puzzle.",
+  "differentiation": "Deterministic 8x8 route puzzle with clear win/loss, save/load and bilingual labels.",
+  "scope": [
+    "Collect three cells and reach EXIT before the move limit",
+    "Support keyboard and adjacent mouse movement",
+    "Provide distinct win and loss states and restart",
+    "Save and restore local progress"
+  ],
+  "evidence_urls": [],
+  "market_status": "UNVERIFIED_PROTOTYPE",
+  "store_identity_status": "HOLD"
+}

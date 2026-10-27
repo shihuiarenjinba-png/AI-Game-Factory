@@ -1,0 +1,71 @@
+name: GAME Signal Sprint Windows EXE prototype
+on:
+  push:
+    branches:
+      - codex/game-signal-sprint-playable-20261027
+    paths:
+      - "products/signal-sprint/**"
+      - "proposals/signal-sprint.json"
+      - ".github/workflows/game-signal-sprint-windows.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: game-signal-sprint-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows-prototype:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Headless gameplay tests
+        run: python -m unittest discover -s products/signal-sprint/tests -p "test_*.py" -v
+      - name: Install pinned Windows EXE builder
+        run: python -m pip install --disable-pip-version-check "pyinstaller==6.16.0"
+      - name: Build unsigned Windows executable
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name SignalSprint --distpath dist/game --workpath dist/work --specpath dist/spec products/signal-sprint/main.py
+      - name: Verify PE header and create SHA provenance
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'dist/game/SignalSprint.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'EXE missing' }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+          if ($bytes.Length -lt 100000 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Invalid PE candidate' }
+          $digest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $record = [ordered]@{
+            schema_version = 1
+            product_type = 'GAME'
+            source_factory = 'AI-Game-Factory'
+            source_repository = $env:SOURCE_REPOSITORY
+            source_branch = $env:SOURCE_BRANCH
+            source_sha = $env:SOURCE_SHA
+            slug = 'signal-sprint'
+            artifact_kind = 'EXE_QA_UNSIGNED'
+            executable = 'SignalSprint.exe'
+            executable_sha256 = $digest
+            official_identity = 'HOLD_NOT_REGISTERED'
+            msix_status = 'NOT_BUILT'
+          }
+          $record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath dist/game/provenance.json -Encoding utf8
+          Write-Host "GAME EXE SHA256: $digest"
+          Write-Host 'Official Identity and MSIX remain HOLD.'
+      - name: Upload unsigned EXE prototype (not an MSIX)
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-signal-sprint-exe-${{ github.sha }}
+          path: |
+            dist/game/SignalSprint.exe
+            dist/game/provenance.json
+          if-no-files-found: error
+          retention-days: 5

@@ -1,0 +1,5 @@
+{
+  "slug": "signal-sprint",
+  "kind": "game",
+  "entry": "main.py"
+}
