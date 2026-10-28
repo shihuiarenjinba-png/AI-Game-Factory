@@ -48,7 +48,7 @@ INTAKE_FIELDS = {
     "pinned_exe", "package_version", "real_msixvc_built", "store_submitted",
 }
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
-BUILD_BRANCH = re.compile(r"codex/game-gdk-signal-sprint-build-[a-zA-Z0-9._-]+\Z")
+BUILD_BRANCH = re.compile(r"codex/game-signal-sprint-gdk-build-[a-z0-9][a-z0-9-]{0,79}\Z")
 
 
 class GateHold(ValueError):
