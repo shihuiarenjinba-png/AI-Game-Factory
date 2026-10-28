@@ -155,6 +155,12 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateHold, "product change in history"):
             self.run_gate()
 
+    def test_moved_immutable_source_branch_rejected(self):
+        # A valid CAS parent is insufficient if the mutable source ref moved.
+        self.cmd("branch", "-f", gate.SOURCE_BRANCH, self.cas)
+        with self.assertRaisesRegex(gate.GateHold, "immutable source branch moved"):
+            self.run_gate()
+
     def test_non_gdk_branch_rejected(self):
         self.cmd("branch", "-m", "codex/game-msix-build")
         with self.assertRaisesRegex(gate.GateHold, "dedicated GDK"):
