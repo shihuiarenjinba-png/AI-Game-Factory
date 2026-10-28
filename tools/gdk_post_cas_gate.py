@@ -97,6 +97,8 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     require(repo.is_dir() and (repo / ".git").exists(), "Factory Git checkout missing")
     require(bool(SHA40.fullmatch(cas)) and bool(SHA40.fullmatch(build))
             and cas != SOURCE_SHA and build != SOURCE_SHA, "invalid CAS/build SHA")
+    require(git(repo, "rev-parse", "refs/heads/" + SOURCE_BRANCH) == SOURCE_SHA,
+            "immutable source branch moved")
     require(git(repo, "rev-parse", "HEAD") == build, "build HEAD mismatch")
     require(git(repo, "status", "--porcelain") == "", "build checkout is dirty")
     branch = git(repo, "symbolic-ref", "--short", "HEAD")
@@ -119,8 +121,9 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     for key, value in expected.items():
         require(type(approved.get(key)) is type(value) and approved[key] == value,
                 "approved Identity mismatch: " + key)
-    require(isinstance(approved.get("signature_status"), str) and
-            bool(approved["signature_status"]), "missing EXE signature provenance")
+    require(type(approved.get("signature_status")) is str and
+            approved["signature_status"] == "QA_UNSIGNED",
+            "pinned EXE signature provenance must remain QA_UNSIGNED")
     require(isinstance(approved.get("provided_at"), str) and bool(re.fullmatch(
             r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
             approved["provided_at"])), "missing Identity provenance timestamp")
