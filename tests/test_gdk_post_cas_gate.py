@@ -35,6 +35,9 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         product.mkdir(parents=True)
         (product / "main.py").write_text("print('pinned')\n")
         self.source = self.commit("immutable source")
+        # CAS belongs on a separate branch: the immutable source ref must
+        # remain at the original source SHA throughout the fixture.
+        self.cmd("checkout", "-q", "-b", "codex/game-gdk-signal-sprint-cas-fixture")
         self.exe = b"pinned executable fixture"
         self.exe_sha = hashlib.sha256(self.exe).hexdigest()
         self.approved = {
@@ -153,6 +156,29 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.intake["factory_head_sha"] = self.build
         self.save_intake()
         with self.assertRaisesRegex(gate.GateHold, "product change in history"):
+            self.run_gate()
+
+    def test_moved_immutable_source_branch_rejected(self):
+        # A valid CAS parent is insufficient if the mutable source ref moved.
+        self.cmd("branch", "-f", gate.SOURCE_BRANCH, self.cas)
+        with self.assertRaisesRegex(gate.GateHold, "immutable source branch moved"):
+            self.run_gate()
+
+    def test_signed_claim_for_unsigned_exe_rejected(self):
+        # Rebuild a clean synthetic CAS chain with a false signed claim.
+        self.cmd("checkout", "-q", "-b",
+                 "codex/game-gdk-signal-sprint-build-signature-fixture", self.source)
+        approved_path = self.repo / gate.APPROVED_PATH
+        approved_path.parent.mkdir(parents=True, exist_ok=True)
+        approved_path.write_text(json.dumps(dict(self.approved, signature_status="SIGNED")))
+        self.cas = self.commit("CAS with false signed provenance")
+        (self.repo / "docs").mkdir(exist_ok=True)
+        (self.repo / "docs" / "SIGNAL_SPRINT_GDK_BUILD.md").write_text("GDK build plan\\n")
+        self.build = self.commit("GDK build branch preparation")
+        self.intake["cas_commit_sha"] = self.cas
+        self.intake["factory_head_sha"] = self.build
+        self.save_intake()
+        with self.assertRaisesRegex(gate.GateHold, "QA_UNSIGNED"):
             self.run_gate()
 
     def test_non_gdk_branch_rejected(self):
