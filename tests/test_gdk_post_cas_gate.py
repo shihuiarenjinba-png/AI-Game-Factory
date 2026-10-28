@@ -161,6 +161,23 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateHold, "immutable source branch moved"):
             self.run_gate()
 
+    def test_signed_claim_for_unsigned_exe_rejected(self):
+        # Rebuild a clean synthetic CAS chain with a false signed claim.
+        self.cmd("checkout", "-q", "-b",
+                 "codex/game-gdk-signal-sprint-build-signature-fixture", self.source)
+        approved_path = self.repo / gate.APPROVED_PATH
+        approved_path.parent.mkdir(parents=True, exist_ok=True)
+        approved_path.write_text(json.dumps(dict(self.approved, signature_status="SIGNED")))
+        self.cas = self.commit("CAS with false signed provenance")
+        (self.repo / "docs").mkdir(exist_ok=True)
+        (self.repo / "docs" / "SIGNAL_SPRINT_GDK_BUILD.md").write_text("GDK build plan\\n")
+        self.build = self.commit("GDK build branch preparation")
+        self.intake["cas_commit_sha"] = self.cas
+        self.intake["factory_head_sha"] = self.build
+        self.save_intake()
+        with self.assertRaisesRegex(gate.GateHold, "QA_UNSIGNED"):
+            self.run_gate()
+
     def test_non_gdk_branch_rejected(self):
         self.cmd("branch", "-m", "codex/game-msix-build")
         with self.assertRaisesRegex(gate.GateHold, "dedicated GDK"):
