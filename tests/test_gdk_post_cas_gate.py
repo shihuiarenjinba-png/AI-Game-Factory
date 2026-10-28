@@ -56,7 +56,7 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         store.mkdir()
         (store / "approved-identity.json").write_text(json.dumps(self.approved))
         self.cas = self.commit("approved GDK Identity CAS")
-        self.cmd("checkout", "-q", "-b", "codex/game-gdk-signal-sprint-build-fixture")
+        self.cmd("checkout", "-q", "-b", "codex/game-signal-sprint-gdk-build-fixture")
         docs = self.repo / "docs"
         docs.mkdir()
         (docs / "SIGNAL_SPRINT_GDK_BUILD.md").write_text("post-CAS GDK packaging\n")
@@ -167,7 +167,7 @@ class GdkFactoryPostCasTests(unittest.TestCase):
     def test_signed_claim_for_unsigned_exe_rejected(self):
         # Rebuild a clean synthetic CAS chain with a false signed claim.
         self.cmd("checkout", "-q", "-b",
-                 "codex/game-gdk-signal-sprint-build-signature-fixture", self.source)
+                 "codex/game-signal-sprint-gdk-build-signature-fixture", self.source)
         approved_path = self.repo / gate.APPROVED_PATH
         approved_path.parent.mkdir(parents=True, exist_ok=True)
         approved_path.write_text(json.dumps(dict(self.approved, signature_status="SIGNED")))
@@ -179,6 +179,18 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.intake["factory_head_sha"] = self.build
         self.save_intake()
         with self.assertRaisesRegex(gate.GateHold, "QA_UNSIGNED"):
+            self.run_gate()
+
+    def test_legacy_factory_only_branch_name_rejected(self):
+        # Provisioner requires codex/game-signal-sprint-gdk-build-*.
+        # A branch accepted by the old Factory regex must fail closed.
+        self.cmd("branch", "-m", "codex/game-gdk-signal-sprint-build-legacy")
+        with self.assertRaisesRegex(gate.GateHold, "dedicated GDK"):
+            self.run_gate()
+
+    def test_malformed_canonical_build_branch_rejected(self):
+        self.cmd("branch", "-m", "codex/game-signal-sprint-gdk-build-")
+        with self.assertRaisesRegex(gate.GateHold, "dedicated GDK"):
             self.run_gate()
 
     def test_non_gdk_branch_rejected(self):
