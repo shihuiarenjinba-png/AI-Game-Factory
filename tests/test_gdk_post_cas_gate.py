@@ -35,6 +35,9 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         product.mkdir(parents=True)
         (product / "main.py").write_text("print('pinned')\n")
         self.source = self.commit("immutable source")
+        # CAS belongs on a separate branch: the immutable source ref must
+        # remain at the original source SHA throughout the fixture.
+        self.cmd("checkout", "-q", "-b", "codex/game-gdk-signal-sprint-cas-fixture")
         self.exe = b"pinned executable fixture"
         self.exe_sha = hashlib.sha256(self.exe).hexdigest()
         self.approved = {
