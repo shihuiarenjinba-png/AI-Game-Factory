@@ -10,7 +10,10 @@
 - Request ID: `game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`
 - Factory EXE artifact ID: `12706862577`; ZIP SHA-256 `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`
 - Inner `SignalSprint.exe` SHA-256: `9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad`
-- GitHub Actions artifact expiry: **2026-11-01 03:18:51 UTC**. Preserve the exact ZIP bytes before expiry; a new build with different bytes is **not** a substitute.
+- Original GitHub Actions artifact expiry: **2026-11-01 03:18:51 UTC**. A new build with different EXE bytes is **not** a substitute.
+- **Verified exact-byte rescue:** Actions run [41105901884](https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/41105901884) produced artifact **12999968947**, `signal-sprint-pinned-original-zip-and-files-rescued-20261031`, expiring **2027-01-28 18:19:12 UTC**. Inside the new artifact wrapper, `signal-sprint-exact-archive/signal-sprint-original-github-artifact-12706862577.zip` retains the **original ZIP SHA-256 `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`**, not merely identical extracted members. The rescue workflow independently verified that SHA, all three member hashes, and ZIP CRC before upload.
+- **Consumption rule:** Download artifact 12999968947, extract its wrapper once, then supply the **nested exact original ZIP**, not the wrapper ZIP, to `--pinned-artifact-zip`. Re-run `gdk_build_intake.py` and `tools/gdk_post_cas_gate.py` checks. Never replace the pinned EXE by rebuilding it or treating a re-zipped wrapper as the original.
+- This is a **temporary 90-day GitHub Actions retention**, not a verified owner-managed durable backup. Long-term independent preservation remains outstanding.
 
 ## Operation (only after explicit, approved CAS)
 
