@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -113,9 +114,13 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     require(git(repo, "rev-parse", "refs/heads/" + SOURCE_BRANCH) == SOURCE_SHA,
             "immutable source branch moved")
     require(git(repo, "rev-parse", "HEAD") == build, "build HEAD mismatch")
-    require(git(repo, "status", "--porcelain") == "", "build checkout is dirty")
+    require(git(repo, "status", "--porcelain", "--untracked-files=all") == "", "build checkout is dirty")
     branch = git(repo, "symbolic-ref", "--short", "HEAD")
     require(bool(BUILD_BRANCH.fullmatch(branch)), "not a dedicated GDK build branch")
+    cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE_SHA[:12]
+    build_ref = "refs/heads/" + branch
+    require(git(repo, "rev-parse", cas_ref) == cas, "dedicated CAS branch ref mismatch")
+    require(git(repo, "rev-parse", build_ref) == build, "dedicated build branch ref mismatch")
     require(git(repo, "rev-list", "--parents", "-n", "1", cas).split() == [cas, SOURCE_SHA],
             "CAS must be single-parent child of immutable source")
     git(repo, "merge-base", "--is-ancestor", cas, build)
@@ -140,6 +145,9 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     require(isinstance(approved.get("provided_at"), str) and bool(re.fullmatch(
             r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
             approved["provided_at"])), "missing Identity provenance timestamp")
+    require(git(repo, "rev-parse", cas + ":" + APPROVED_PATH) ==
+            git(repo, "rev-parse", build + ":" + APPROVED_PATH),
+            "post-CAS Identity bytes changed")
     require(parse_json(git(repo, "show", build + ":" + APPROVED_PATH).encode()) == approved,
             "post-CAS Identity modified")
     # Reject every intermediate change to product bytes, including a later revert.
@@ -150,6 +158,17 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
         for name in changed_paths(repo, commit):
             require(not name.startswith("products/") and name != APPROVED_PATH,
                     "post-CAS product change in history")
+    # Re-read refs and checkout after history checks to reject stale receipts.
+    require(git(repo, "rev-parse", "refs/heads/" + SOURCE_BRANCH) == SOURCE_SHA,
+            "immutable source branch moved during verification")
+    require(git(repo, "rev-parse", cas_ref) == cas,
+            "dedicated CAS branch moved during verification")
+    require(git(repo, "rev-parse", build_ref) == build and
+            git(repo, "rev-parse", "HEAD") == build and
+            git(repo, "symbolic-ref", "--short", "HEAD") == branch,
+            "dedicated build branch moved during verification")
+    require(git(repo, "status", "--porcelain", "--untracked-files=all") == "",
+            "build checkout changed during verification")
     return {"branch": branch, "cas_commit_sha": cas, "factory_head_sha": build}
 
 
@@ -160,7 +179,7 @@ def check_artifact(path: Path) -> dict:
     require(hashlib.sha256(raw).hexdigest() == ARTIFACT_SHA,
             "pinned ZIP SHA-256 mismatch")
     try:
-        with zipfile.ZipFile(path) as archive:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             members = archive.infolist()
             require(len(members) == 3 and {m.filename for m in members} == {
                 "SignalSprint.exe", "provenance.json", "provisioner-request.json"},
@@ -176,6 +195,10 @@ def check_artifact(path: Path) -> dict:
             request = parse_json(archive.read("provisioner-request.json"))
     except (zipfile.BadZipFile, OSError, RuntimeError, EOFError) as exc:
         raise GateHold("invalid pinned ZIP") from exc
+    # Parse the same snapshot that was hashed; reject path replacement races.
+    require(not path.is_symlink() and path.is_file() and
+            hashlib.sha256(path.read_bytes()).hexdigest() == ARTIFACT_SHA,
+            "pinned ZIP changed during verification")
     require(hashlib.sha256(exe).hexdigest() == EXE_SHA, "pinned EXE SHA mismatch")
     for record in (provenance, request):
         for key, expected in {"request_id": REQUEST_ID, "source_sha": SOURCE_SHA,

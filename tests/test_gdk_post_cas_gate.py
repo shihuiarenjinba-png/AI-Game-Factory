@@ -37,7 +37,8 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.source = self.commit("immutable source")
         # CAS belongs on a separate branch: the immutable source ref must
         # remain at the original source SHA throughout the fixture.
-        self.cmd("checkout", "-q", "-b", "codex/game-gdk-signal-sprint-cas-fixture")
+        self.cmd("checkout", "-q", "-b",
+                 "codex/game-signal-sprint-gdk-cas-" + self.source[:12])
         self.exe = b"pinned executable fixture"
         self.exe_sha = hashlib.sha256(self.exe).hexdigest()
         self.approved = {
@@ -177,6 +178,35 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateHold, "immutable source branch moved"):
             self.run_gate()
 
+    def test_dedicated_cas_ref_mismatch_rejected(self):
+        self.cmd("branch", "-f",
+                 "codex/game-signal-sprint-gdk-cas-" + self.source[:12], self.source)
+        with self.assertRaisesRegex(gate.GateHold, "dedicated CAS branch ref mismatch"):
+            self.run_gate()
+
+    def test_untracked_build_file_rejected(self):
+        (self.repo / "unreviewed-output.bin").write_bytes(b"unreviewed")
+        with self.assertRaisesRegex(gate.GateHold, "checkout is dirty"):
+            self.run_gate()
+
+    def test_post_cas_identity_byte_reformat_rejected(self):
+        approved_path = self.repo / gate.APPROVED_PATH
+        approved_path.write_text(json.dumps(self.approved, indent=2))
+        self.build = self.commit("reformat approved identity without value change")
+        self.intake["factory_head_sha"] = self.build
+        self.save_intake()
+        with self.assertRaisesRegex(gate.GateHold, "Identity bytes changed"):
+            self.run_gate()
+
+    def test_artifact_swap_during_zip_parse_rejected(self):
+        original_zipfile = zipfile.ZipFile
+        def swap_during_parse(*args, **kwargs):
+            self.artifact.write_bytes(self.artifact.read_bytes() + b"changed")
+            return original_zipfile(*args, **kwargs)
+        with patch.object(gate.zipfile, "ZipFile", side_effect=swap_during_parse):
+            with self.assertRaisesRegex(gate.GateHold, "ZIP changed during verification"):
+                gate.check_artifact(self.artifact)
+
     def test_signed_claim_for_unsigned_exe_rejected(self):
         # Rebuild a clean synthetic CAS chain with a false signed claim.
         self.cmd("checkout", "-q", "-b",
@@ -185,6 +215,8 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         approved_path.parent.mkdir(parents=True, exist_ok=True)
         approved_path.write_text(json.dumps(dict(self.approved, signature_status="SIGNED")))
         self.cas = self.commit("CAS with false signed provenance")
+        self.cmd("branch", "-f",
+                 "codex/game-signal-sprint-gdk-cas-" + self.source[:12], self.cas)
         (self.repo / "docs").mkdir(exist_ok=True)
         (self.repo / "docs" / "SIGNAL_SPRINT_GDK_BUILD.md").write_text("GDK build plan\\n")
         self.build = self.commit("GDK build branch preparation")
