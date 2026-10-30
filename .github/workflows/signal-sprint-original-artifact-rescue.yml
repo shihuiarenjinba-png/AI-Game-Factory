@@ -63,11 +63,48 @@ jobs:
           print("PINNED_ORIGINAL_EXE_AND_PROVENANCE_PASS; no rebuild or identity mutation")
           PY
 
-      - name: Re-upload exact three original files for temporary retention
+      - name: Retrieve and verify exact original GitHub artifact ZIP bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p signal-sprint-exact-archive
+          original="signal-sprint-exact-archive/signal-sprint-original-github-artifact-12706862577.zip"
+          curl --fail --silent --show-error --location --retry 2 --max-time 120 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/12706862577/zip" \
+            --output "${original}"
+          echo "e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412  ${original}" | sha256sum --check --status
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          archive = Path("signal-sprint-exact-archive/signal-sprint-original-github-artifact-12706862577.zip")
+          extracted = Path("signal-sprint-original")
+          expected = {"SignalSprint.exe", "provenance.json", "provisioner-request.json"}
+          with ZipFile(archive) as z:
+              members = z.infolist()
+              assert len(members) == 3 and {m.filename for m in members} == expected
+              assert z.testzip() is None, "original ZIP CRC mismatch"
+              for member in members:
+                  assert not member.is_dir(), "unexpected directory in original ZIP"
+                  assert hashlib.sha256(z.read(member.filename)).digest() == hashlib.sha256(
+                      (extracted / member.filename).read_bytes()
+                  ).digest(), "downloaded ZIP member differs from verified original"
+          print("EXACT_ORIGINAL_ZIP_AND_ALL_MEMBERS_PASS; no rebuild")
+          PY
+
+      - name: Re-upload original ZIP and three byte-identical files for temporary retention
         uses: actions/upload-artifact@v4
         with:
-          name: signal-sprint-pinned-original-files-rescued-20261031
-          path: signal-sprint-original/
+          name: signal-sprint-pinned-original-zip-and-files-rescued-20261031
+          path: |
+            signal-sprint-original/
+            signal-sprint-exact-archive/
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
@@ -76,5 +113,5 @@ jobs:
         shell: bash
         run: |
           echo 'Signal Sprint original EXE and JSON files preserved without byte modification.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'This is a new Actions artifact archive (ZIP bytes differ from original); only the three verified member files are byte-identical.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The new Actions artifact wrapper ZIP differs, but contains the exact original GitHub artifact ZIP (SHA-256 e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412) plus the three verified member files.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Actions retention is temporary, not owner-managed permanent backup. CAS, GDK build, Store submission and E2E remain NOT DONE.' >> "$GITHUB_STEP_SUMMARY"
