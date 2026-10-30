@@ -158,6 +158,19 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateHold, "product change in history"):
             self.run_gate()
 
+    def test_post_cas_unicode_product_edit_then_revert_rejected(self):
+        # Git's default non-NUL diff output C-quotes non-ASCII paths.
+        # A quoted path begins with a double quote, not 'products/'.
+        unexpected = self.repo / "products/signal-sprint/日本語.txt"
+        unexpected.write_text("unreviewed product change", encoding="utf-8")
+        self.commit("tamper with non-ASCII product path")
+        unexpected.unlink()
+        self.build = self.commit("revert non-ASCII product path")
+        self.intake["factory_head_sha"] = self.build
+        self.save_intake()
+        with self.assertRaisesRegex(gate.GateHold, "product change in history"):
+            self.run_gate()
+
     def test_moved_immutable_source_branch_rejected(self):
         # A valid CAS parent is insufficient if the mutable source ref moved.
         self.cmd("branch", "-f", gate.SOURCE_BRANCH, self.cas)
