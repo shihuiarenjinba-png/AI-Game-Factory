@@ -255,7 +255,7 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.build = self.commit("change Identity")
         self.intake["factory_head_sha"] = self.build
         self.save_intake()
-        with self.assertRaisesRegex(gate.GateHold, "Identity modified"):
+        with self.assertRaisesRegex(gate.GateHold, "Identity bytes changed"):
             self.run_gate()
 
 
