@@ -22,6 +22,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           artifact-ids: 12706862577
+          run-id: 40443340158
           github-token: ${{ github.token }}
           repository: shihuiarenjinba-png/AI-Game-Factory
           merge-multiple: true
