@@ -93,6 +93,19 @@ def git(repo: Path, *args: str) -> str:
     return proc.stdout.decode("utf-8").strip()
 
 
+def changed_paths(repo: Path, commit: str) -> list[str]:
+    """Read NUL-delimited literal Git names; quoted display paths are unsafe.
+
+    Without -z, Git quotes non-ASCII/control characters and a leading quote
+    can conceal a products/ prefix from the immutable-history guard.
+    """
+    raw = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-z", "-r", commit)
+    require(not raw or raw.endswith("\x00"), "malformed Git changed-path inventory")
+    names = raw[:-1].split("\x00") if raw else []
+    require(all(names), "empty Git changed-path entry")
+    return names
+
+
 def check_git(repo: Path, cas: str, build: str) -> dict:
     require(repo.is_dir() and (repo / ".git").exists(), "Factory Git checkout missing")
     require(bool(SHA40.fullmatch(cas)) and bool(SHA40.fullmatch(build))
@@ -106,8 +119,8 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     require(git(repo, "rev-list", "--parents", "-n", "1", cas).split() == [cas, SOURCE_SHA],
             "CAS must be single-parent child of immutable source")
     git(repo, "merge-base", "--is-ancestor", cas, build)
-    require(git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", cas)
-            == APPROVED_PATH, "CAS changed non-Identity files")
+    require(changed_paths(repo, cas) == [APPROVED_PATH],
+            "CAS changed non-Identity files")
     approved = parse_json(git(repo, "show", cas + ":" + APPROVED_PATH).encode())
     require(set(approved) == APPROVED_FIELDS, "approved Identity schema differs")
     expected = {"schema_version": "1.0", "reviewed": True,
@@ -134,8 +147,7 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     for commit in commits:
         parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
         require(len(parents) == 2, "post-CAS merge commit requires review")
-        changed = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", commit)
-        for name in changed.splitlines():
+        for name in changed_paths(repo, commit):
             require(not name.startswith("products/") and name != APPROVED_PATH,
                     "post-CAS product change in history")
     return {"branch": branch, "cas_commit_sha": cas, "factory_head_sha": build}
