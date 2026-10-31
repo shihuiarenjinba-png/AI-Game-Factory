@@ -91,6 +91,12 @@ def require_valid_provided_at(value: object) -> None:
     )
     require(type(value) is str and re.fullmatch(pattern, value) is not None,
             "GDK Identity provided_at must be RFC3339 with timezone")
+    # datetime.fromisoformat may normalize malformed offsets such as +09:99.
+    # Reject invalid RFC3339 offset components without changing supplied data.
+    if value[-1] != "Z":
+        hour, minute = int(value[-5:-3]), int(value[-2:])
+        require(hour <= 23 and minute <= 59,
+                "GDK Identity provided_at timezone offset invalid")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
