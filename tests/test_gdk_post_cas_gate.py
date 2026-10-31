@@ -1,6 +1,7 @@
 """Offline synthetic Git/ZIP regression tests for the GDK Factory check-only gate."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -118,6 +119,38 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.assertEqual(result["factory_head_sha"], self.build)
         self.assertFalse(result["real_msixvc_built"])
         self.assertFalse(result["windows_e2e_pass"])
+
+    def test_timestamp_provenance_accepts_real_utc_and_offset(self):
+        gate.require_valid_provided_at("2026-10-28T12:00:00Z")
+        gate.require_valid_provided_at("2026-10-28T21:00:00+09:00")
+        gate.require_valid_provided_at("2026-10-28T12:00:00.123456Z")
+
+    def test_timestamp_provenance_rejects_invalid_calendar_and_timezone(self):
+        for bad in (
+            "2026-02-30T12:00:00Z",
+            "2026-13-01T12:00:00Z",
+            "2026-10-28T25:00:00Z",
+            "2026-10-28T12:00:00",
+            "2026-10-28T12:00:00+25:00",
+            "2026-10-28T12:00:00+09:99",
+            "2026-10-28T12:00:00.1234567Z",
+            "2026-10-28T12:00:00Z\\n",
+            None, True,
+        ):
+            with self.subTest(bad=bad), self.assertRaises(gate.GateHold):
+                gate.require_valid_provided_at(bad)
+
+    def test_timestamp_provenance_rejects_future_date(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        with self.assertRaisesRegex(gate.GateHold, "future"):
+            gate.require_valid_provided_at(future)
+
+    def test_full_post_cas_gate_invokes_strict_timestamp_guard(self):
+        with patch.object(gate, "require_valid_provided_at",
+                          side_effect=gate.GateHold("timestamp guard invoked")) as check:
+            with self.assertRaisesRegex(gate.GateHold, "timestamp guard invoked"):
+                self.run_gate()
+            check.assert_called_once_with(self.approved["provided_at"])
 
     def test_forged_intake_head_rejected(self):
         self.intake["factory_head_sha"] = "b" * 40
