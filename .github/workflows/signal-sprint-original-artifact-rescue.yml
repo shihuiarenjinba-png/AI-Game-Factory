@@ -1,0 +1,117 @@
+name: Signal Sprint pinned original EXE rescue (no build)
+
+# One-shot preservation on the Factory development PR branch only.
+# This workflow never rebuilds the EXE, applies CAS, installs GDK, or submits to Store.
+on:
+  push:
+    branches:
+      - codex/game-gdk-cross-repo-branch-20261029
+    paths:
+      - .github/workflows/signal-sprint-original-artifact-rescue.yml
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  preserve-original:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download the existing pinned Factory artifact (extract only)
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 12706862577
+          run-id: 40443340158
+          github-token: ${{ github.token }}
+          repository: shihuiarenjinba-png/AI-Game-Factory
+          merge-multiple: true
+          path: signal-sprint-original
+
+      - name: Verify original EXE and provenance bytes before preserving
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("signal-sprint-original")
+          expected = {
+              "SignalSprint.exe": "9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad",
+              "provenance.json": "797f8d9f93846a55ab32143b3d957e041f2516547cd850babe75131cb2f0fe96",
+              "provisioner-request.json": "79375be526d4dbdb477d241cc0c168c6514d2d1ccc99e2f46bf2775524284a43",
+          }
+          assert root.is_dir(), "original artifact extraction missing"
+          entries = list(root.iterdir())
+          assert {p.name for p in entries} == set(expected), "unexpected original artifact members"
+          assert all(p.is_file() and not p.is_symlink() for p in entries), "unsafe artifact member"
+          for name, digest in expected.items():
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              assert actual == digest, f"pinned original SHA-256 mismatch: {name}"
+          provenance = json.loads((root / "provenance.json").read_text(encoding="utf-8"))
+          request = json.loads((root / "provisioner-request.json").read_text(encoding="utf-8"))
+          source = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
+          request_id = "game-signal-sprint-" + source
+          for item in (provenance, request):
+              assert item["source_sha"] == source, "source SHA mismatch"
+              assert item["request_id"] == request_id, "request ID mismatch"
+          assert provenance["executable_sha256"] == expected["SignalSprint.exe"]
+          assert provenance["artifact_kind"] == "EXE_QA_UNSIGNED"
+          assert request["product_type"] == "GAME"
+          print("PINNED_ORIGINAL_EXE_AND_PROVENANCE_PASS; no rebuild or identity mutation")
+          PY
+
+      - name: Retrieve and verify exact original GitHub artifact ZIP bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p signal-sprint-exact-archive
+          original="signal-sprint-exact-archive/signal-sprint-original-github-artifact-12706862577.zip"
+          curl --fail --silent --show-error --location --retry 2 --max-time 120 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/12706862577/zip" \
+            --output "${original}"
+          echo "e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412  ${original}" | sha256sum --check --status
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          archive = Path("signal-sprint-exact-archive/signal-sprint-original-github-artifact-12706862577.zip")
+          extracted = Path("signal-sprint-original")
+          expected = {"SignalSprint.exe", "provenance.json", "provisioner-request.json"}
+          with ZipFile(archive) as z:
+              members = z.infolist()
+              assert len(members) == 3 and {m.filename for m in members} == expected
+              assert z.testzip() is None, "original ZIP CRC mismatch"
+              for member in members:
+                  assert not member.is_dir(), "unexpected directory in original ZIP"
+                  assert hashlib.sha256(z.read(member.filename)).digest() == hashlib.sha256(
+                      (extracted / member.filename).read_bytes()
+                  ).digest(), "downloaded ZIP member differs from verified original"
+          print("EXACT_ORIGINAL_ZIP_AND_ALL_MEMBERS_PASS; no rebuild")
+          PY
+
+      - name: Re-upload original ZIP and three byte-identical files for temporary retention
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-pinned-original-zip-and-files-rescued-20261031
+          path: |
+            signal-sprint-original/
+            signal-sprint-exact-archive/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Record preservation limitations
+        shell: bash
+        run: |
+          echo 'Signal Sprint original EXE and JSON files preserved without byte modification.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The new Actions artifact wrapper ZIP differs, but contains the exact original GitHub artifact ZIP (SHA-256 e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412) plus the three verified member files.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Actions retention is temporary, not owner-managed permanent backup. CAS, GDK build, Store submission and E2E remain NOT DONE.' >> "$GITHUB_STEP_SUMMARY"

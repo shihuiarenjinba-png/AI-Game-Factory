@@ -1,6 +1,7 @@
 """Offline synthetic Git/ZIP regression tests for the GDK Factory check-only gate."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -37,7 +38,8 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.source = self.commit("immutable source")
         # CAS belongs on a separate branch: the immutable source ref must
         # remain at the original source SHA throughout the fixture.
-        self.cmd("checkout", "-q", "-b", "codex/game-gdk-signal-sprint-cas-fixture")
+        self.cmd("checkout", "-q", "-b",
+                 "codex/game-signal-sprint-gdk-cas-" + self.source[:12])
         self.exe = b"pinned executable fixture"
         self.exe_sha = hashlib.sha256(self.exe).hexdigest()
         self.approved = {
@@ -56,7 +58,7 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         store.mkdir()
         (store / "approved-identity.json").write_text(json.dumps(self.approved))
         self.cas = self.commit("approved GDK Identity CAS")
-        self.cmd("checkout", "-q", "-b", "codex/game-gdk-signal-sprint-build-fixture")
+        self.cmd("checkout", "-q", "-b", "codex/game-signal-sprint-gdk-build-fixture")
         docs = self.repo / "docs"
         docs.mkdir()
         (docs / "SIGNAL_SPRINT_GDK_BUILD.md").write_text("post-CAS GDK packaging\n")
@@ -118,6 +120,38 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.assertFalse(result["real_msixvc_built"])
         self.assertFalse(result["windows_e2e_pass"])
 
+    def test_timestamp_provenance_accepts_real_utc_and_offset(self):
+        gate.require_valid_provided_at("2026-10-28T12:00:00Z")
+        gate.require_valid_provided_at("2026-10-28T21:00:00+09:00")
+        gate.require_valid_provided_at("2026-10-28T12:00:00.123456Z")
+
+    def test_timestamp_provenance_rejects_invalid_calendar_and_timezone(self):
+        for bad in (
+            "2026-02-30T12:00:00Z",
+            "2026-13-01T12:00:00Z",
+            "2026-10-28T25:00:00Z",
+            "2026-10-28T12:00:00",
+            "2026-10-28T12:00:00+25:00",
+            "2026-10-28T12:00:00+09:99",
+            "2026-10-28T12:00:00.1234567Z",
+            "2026-10-28T12:00:00Z\\n",
+            None, True,
+        ):
+            with self.subTest(bad=bad), self.assertRaises(gate.GateHold):
+                gate.require_valid_provided_at(bad)
+
+    def test_timestamp_provenance_rejects_future_date(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        with self.assertRaisesRegex(gate.GateHold, "future"):
+            gate.require_valid_provided_at(future)
+
+    def test_full_post_cas_gate_invokes_strict_timestamp_guard(self):
+        with patch.object(gate, "require_valid_provided_at",
+                          side_effect=gate.GateHold("timestamp guard invoked")) as check:
+            with self.assertRaisesRegex(gate.GateHold, "timestamp guard invoked"):
+                self.run_gate()
+            check.assert_called_once_with(self.approved["provided_at"])
+
     def test_forged_intake_head_rejected(self):
         self.intake["factory_head_sha"] = "b" * 40
         self.save_intake()
@@ -158,20 +192,64 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateHold, "product change in history"):
             self.run_gate()
 
+    def test_post_cas_unicode_product_edit_then_revert_rejected(self):
+        # Git's default non-NUL diff output C-quotes non-ASCII paths.
+        # A quoted path begins with a double quote, not 'products/'.
+        unexpected = self.repo / "products/signal-sprint/日本語.txt"
+        unexpected.write_text("unreviewed product change", encoding="utf-8")
+        self.commit("tamper with non-ASCII product path")
+        unexpected.unlink()
+        self.build = self.commit("revert non-ASCII product path")
+        self.intake["factory_head_sha"] = self.build
+        self.save_intake()
+        with self.assertRaisesRegex(gate.GateHold, "product change in history"):
+            self.run_gate()
+
     def test_moved_immutable_source_branch_rejected(self):
         # A valid CAS parent is insufficient if the mutable source ref moved.
         self.cmd("branch", "-f", gate.SOURCE_BRANCH, self.cas)
         with self.assertRaisesRegex(gate.GateHold, "immutable source branch moved"):
             self.run_gate()
 
+    def test_dedicated_cas_ref_mismatch_rejected(self):
+        self.cmd("branch", "-f",
+                 "codex/game-signal-sprint-gdk-cas-" + self.source[:12], self.source)
+        with self.assertRaisesRegex(gate.GateHold, "dedicated CAS branch ref mismatch"):
+            self.run_gate()
+
+    def test_untracked_build_file_rejected(self):
+        (self.repo / "unreviewed-output.bin").write_bytes(b"unreviewed")
+        with self.assertRaisesRegex(gate.GateHold, "checkout is dirty"):
+            self.run_gate()
+
+    def test_post_cas_identity_byte_reformat_rejected(self):
+        approved_path = self.repo / gate.APPROVED_PATH
+        approved_path.write_text(json.dumps(self.approved, indent=2))
+        self.build = self.commit("reformat approved identity without value change")
+        self.intake["factory_head_sha"] = self.build
+        self.save_intake()
+        with self.assertRaisesRegex(gate.GateHold, "Identity bytes changed"):
+            self.run_gate()
+
+    def test_artifact_swap_during_zip_parse_rejected(self):
+        original_zipfile = zipfile.ZipFile
+        def swap_during_parse(*args, **kwargs):
+            self.artifact.write_bytes(self.artifact.read_bytes() + b"changed")
+            return original_zipfile(*args, **kwargs)
+        with patch.object(gate.zipfile, "ZipFile", side_effect=swap_during_parse):
+            with self.assertRaisesRegex(gate.GateHold, "ZIP changed during verification"):
+                gate.check_artifact(self.artifact)
+
     def test_signed_claim_for_unsigned_exe_rejected(self):
         # Rebuild a clean synthetic CAS chain with a false signed claim.
         self.cmd("checkout", "-q", "-b",
-                 "codex/game-gdk-signal-sprint-build-signature-fixture", self.source)
+                 "codex/game-signal-sprint-gdk-build-signature-fixture", self.source)
         approved_path = self.repo / gate.APPROVED_PATH
         approved_path.parent.mkdir(parents=True, exist_ok=True)
         approved_path.write_text(json.dumps(dict(self.approved, signature_status="SIGNED")))
         self.cas = self.commit("CAS with false signed provenance")
+        self.cmd("branch", "-f",
+                 "codex/game-signal-sprint-gdk-cas-" + self.source[:12], self.cas)
         (self.repo / "docs").mkdir(exist_ok=True)
         (self.repo / "docs" / "SIGNAL_SPRINT_GDK_BUILD.md").write_text("GDK build plan\\n")
         self.build = self.commit("GDK build branch preparation")
@@ -179,6 +257,18 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.intake["factory_head_sha"] = self.build
         self.save_intake()
         with self.assertRaisesRegex(gate.GateHold, "QA_UNSIGNED"):
+            self.run_gate()
+
+    def test_legacy_factory_only_branch_name_rejected(self):
+        # Provisioner requires codex/game-signal-sprint-gdk-build-*.
+        # A branch accepted by the old Factory regex must fail closed.
+        self.cmd("branch", "-m", "codex/game-gdk-signal-sprint-build-legacy")
+        with self.assertRaisesRegex(gate.GateHold, "dedicated GDK"):
+            self.run_gate()
+
+    def test_malformed_canonical_build_branch_rejected(self):
+        self.cmd("branch", "-m", "codex/game-signal-sprint-gdk-build-")
+        with self.assertRaisesRegex(gate.GateHold, "dedicated GDK"):
             self.run_gate()
 
     def test_non_gdk_branch_rejected(self):
@@ -198,7 +288,7 @@ class GdkFactoryPostCasTests(unittest.TestCase):
         self.build = self.commit("change Identity")
         self.intake["factory_head_sha"] = self.build
         self.save_intake()
-        with self.assertRaisesRegex(gate.GateHold, "Identity modified"):
+        with self.assertRaisesRegex(gate.GateHold, "Identity bytes changed"):
             self.run_gate()
 
 

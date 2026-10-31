@@ -7,7 +7,9 @@ pinned EXE artifact rather than trusting its PASS-like status.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -48,7 +50,7 @@ INTAKE_FIELDS = {
     "pinned_exe", "package_version", "real_msixvc_built", "store_submitted",
 }
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
-BUILD_BRANCH = re.compile(r"codex/game-gdk-signal-sprint-build-[a-zA-Z0-9._-]+\Z")
+BUILD_BRANCH = re.compile(r"codex/game-signal-sprint-gdk-build-[a-z0-9][a-z0-9-]{0,79}\Z")
 
 
 class GateHold(ValueError):
@@ -77,10 +79,63 @@ def parse_json(data: bytes) -> dict:
     return obj
 
 
+def require_valid_provided_at(value: object) -> None:
+    """Match Provisioner's strict GDK Identity provenance timestamp gate.
+
+    A regex-shaped timestamp may still be an impossible date or in the future.
+    Preserve the original user-provided string without guessing or rewriting.
+    """
+    pattern = (
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+        r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})\Z"
+    )
+    require(type(value) is str and re.fullmatch(pattern, value) is not None,
+            "GDK Identity provided_at must be RFC3339 with timezone")
+    # datetime.fromisoformat may normalize malformed offsets such as +09:99.
+    # Reject invalid RFC3339 offset components without changing supplied data.
+    if value[-1] != "Z":
+        hour, minute = int(value[-5:-3]), int(value[-2:])
+        require(hour <= 23 and minute <= 59,
+                "GDK Identity provided_at timezone offset invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise GateHold("GDK Identity provided_at calendar date/time invalid") from exc
+    require(parsed.tzinfo is not None and parsed.utcoffset() is not None,
+            "GDK Identity provided_at timezone missing")
+    require(parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc) + timedelta(minutes=5),
+            "GDK Identity provided_at cannot be in the future")
+
+
+def reject_redirected_path(path: Path, label: str) -> None:
+    """Fail closed for symlink/junction ancestors as well as the leaf.
+
+    A clean leaf under a redirected parent is not trusted provenance. These
+    checks are repeated after reading; they do not replace trusted storage
+    against concurrent filesystem races.
+    """
+    for component in (path, *path.parents):
+        try:
+            linked = component.is_symlink()
+            junction = getattr(component, "is_junction", lambda: False)()
+        except (OSError, RuntimeError) as exc:
+            raise GateHold(label + " path cannot be inspected") from exc
+        require(not linked and not junction, label + " contains linked path component")
+
+
 def load_json(path: Path) -> dict:
-    require(not path.is_symlink() and path.is_file() and 0 < path.stat().st_size <= 65536,
-            "missing, linked or oversized JSON input")
-    return parse_json(path.read_bytes())
+    reject_redirected_path(path, "Provisioner intake")
+    require(path.is_file(), "missing or non-file JSON input")
+    before = path.stat()
+    require(0 < before.st_size <= 65536, "missing or oversized JSON input")
+    raw = path.read_bytes()
+    after = path.stat()
+    require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) ==
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) and
+            len(raw) == before.st_size,
+            "Provisioner intake changed during read")
+    reject_redirected_path(path, "Provisioner intake")
+    return parse_json(raw)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -93,6 +148,19 @@ def git(repo: Path, *args: str) -> str:
     return proc.stdout.decode("utf-8").strip()
 
 
+def changed_paths(repo: Path, commit: str) -> list[str]:
+    """Read NUL-delimited literal Git names; quoted display paths are unsafe.
+
+    Without -z, Git quotes non-ASCII/control characters and a leading quote
+    can conceal a products/ prefix from the immutable-history guard.
+    """
+    raw = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-z", "-r", commit)
+    require(not raw or raw.endswith("\x00"), "malformed Git changed-path inventory")
+    names = raw[:-1].split("\x00") if raw else []
+    require(all(names), "empty Git changed-path entry")
+    return names
+
+
 def check_git(repo: Path, cas: str, build: str) -> dict:
     require(repo.is_dir() and (repo / ".git").exists(), "Factory Git checkout missing")
     require(bool(SHA40.fullmatch(cas)) and bool(SHA40.fullmatch(build))
@@ -100,14 +168,18 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     require(git(repo, "rev-parse", "refs/heads/" + SOURCE_BRANCH) == SOURCE_SHA,
             "immutable source branch moved")
     require(git(repo, "rev-parse", "HEAD") == build, "build HEAD mismatch")
-    require(git(repo, "status", "--porcelain") == "", "build checkout is dirty")
+    require(git(repo, "status", "--porcelain", "--untracked-files=all") == "", "build checkout is dirty")
     branch = git(repo, "symbolic-ref", "--short", "HEAD")
     require(bool(BUILD_BRANCH.fullmatch(branch)), "not a dedicated GDK build branch")
+    cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE_SHA[:12]
+    build_ref = "refs/heads/" + branch
+    require(git(repo, "rev-parse", cas_ref) == cas, "dedicated CAS branch ref mismatch")
+    require(git(repo, "rev-parse", build_ref) == build, "dedicated build branch ref mismatch")
     require(git(repo, "rev-list", "--parents", "-n", "1", cas).split() == [cas, SOURCE_SHA],
             "CAS must be single-parent child of immutable source")
     git(repo, "merge-base", "--is-ancestor", cas, build)
-    require(git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", cas)
-            == APPROVED_PATH, "CAS changed non-Identity files")
+    require(changed_paths(repo, cas) == [APPROVED_PATH],
+            "CAS changed non-Identity files")
     approved = parse_json(git(repo, "show", cas + ":" + APPROVED_PATH).encode())
     require(set(approved) == APPROVED_FIELDS, "approved Identity schema differs")
     expected = {"schema_version": "1.0", "reviewed": True,
@@ -124,9 +196,10 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     require(type(approved.get("signature_status")) is str and
             approved["signature_status"] == "QA_UNSIGNED",
             "pinned EXE signature provenance must remain QA_UNSIGNED")
-    require(isinstance(approved.get("provided_at"), str) and bool(re.fullmatch(
-            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
-            approved["provided_at"])), "missing Identity provenance timestamp")
+    require_valid_provided_at(approved.get("provided_at"))
+    require(git(repo, "rev-parse", cas + ":" + APPROVED_PATH) ==
+            git(repo, "rev-parse", build + ":" + APPROVED_PATH),
+            "post-CAS Identity bytes changed")
     require(parse_json(git(repo, "show", build + ":" + APPROVED_PATH).encode()) == approved,
             "post-CAS Identity modified")
     # Reject every intermediate change to product bytes, including a later revert.
@@ -134,21 +207,32 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     for commit in commits:
         parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
         require(len(parents) == 2, "post-CAS merge commit requires review")
-        changed = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", commit)
-        for name in changed.splitlines():
+        for name in changed_paths(repo, commit):
             require(not name.startswith("products/") and name != APPROVED_PATH,
                     "post-CAS product change in history")
+    # Re-read refs and checkout after history checks to reject stale receipts.
+    require(git(repo, "rev-parse", "refs/heads/" + SOURCE_BRANCH) == SOURCE_SHA,
+            "immutable source branch moved during verification")
+    require(git(repo, "rev-parse", cas_ref) == cas,
+            "dedicated CAS branch moved during verification")
+    require(git(repo, "rev-parse", build_ref) == build and
+            git(repo, "rev-parse", "HEAD") == build and
+            git(repo, "symbolic-ref", "--short", "HEAD") == branch,
+            "dedicated build branch moved during verification")
+    require(git(repo, "status", "--porcelain", "--untracked-files=all") == "",
+            "build checkout changed during verification")
     return {"branch": branch, "cas_commit_sha": cas, "factory_head_sha": build}
 
 
 def check_artifact(path: Path) -> dict:
-    require(not path.is_symlink() and path.is_file() and
-            0 < path.stat().st_size < 100_000_000, "pinned EXE artifact unavailable")
+    reject_redirected_path(path, "Pinned EXE artifact")
+    require(path.is_file() and 0 < path.stat().st_size < 100_000_000,
+            "pinned EXE artifact unavailable")
     raw = path.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == ARTIFACT_SHA,
             "pinned ZIP SHA-256 mismatch")
     try:
-        with zipfile.ZipFile(path) as archive:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             members = archive.infolist()
             require(len(members) == 3 and {m.filename for m in members} == {
                 "SignalSprint.exe", "provenance.json", "provisioner-request.json"},
@@ -164,6 +248,12 @@ def check_artifact(path: Path) -> dict:
             request = parse_json(archive.read("provisioner-request.json"))
     except (zipfile.BadZipFile, OSError, RuntimeError, EOFError) as exc:
         raise GateHold("invalid pinned ZIP") from exc
+    # Parse the same snapshot that was hashed; reject path replacement races.
+    reject_redirected_path(path, "Pinned EXE artifact")
+    require(path.is_file() and
+            hashlib.sha256(path.read_bytes()).hexdigest() == ARTIFACT_SHA,
+            "pinned ZIP changed during verification")
+    reject_redirected_path(path, "Pinned EXE artifact")
     require(hashlib.sha256(exe).hexdigest() == EXE_SHA, "pinned EXE SHA mismatch")
     for record in (provenance, request):
         for key, expected in {"request_id": REQUEST_ID, "source_sha": SOURCE_SHA,
