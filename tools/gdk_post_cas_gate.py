@@ -78,10 +78,35 @@ def parse_json(data: bytes) -> dict:
     return obj
 
 
+def reject_redirected_path(path: Path, label: str) -> None:
+    """Fail closed for symlink/junction ancestors as well as the leaf.
+
+    A clean leaf under a redirected parent is not trusted provenance. These
+    checks are repeated after reading; they do not replace trusted storage
+    against concurrent filesystem races.
+    """
+    for component in (path, *path.parents):
+        try:
+            linked = component.is_symlink()
+            junction = getattr(component, "is_junction", lambda: False)()
+        except (OSError, RuntimeError) as exc:
+            raise GateHold(label + " path cannot be inspected") from exc
+        require(not linked and not junction, label + " contains linked path component")
+
+
 def load_json(path: Path) -> dict:
-    require(not path.is_symlink() and path.is_file() and 0 < path.stat().st_size <= 65536,
-            "missing, linked or oversized JSON input")
-    return parse_json(path.read_bytes())
+    reject_redirected_path(path, "Provisioner intake")
+    require(path.is_file(), "missing or non-file JSON input")
+    before = path.stat()
+    require(0 < before.st_size <= 65536, "missing or oversized JSON input")
+    raw = path.read_bytes()
+    after = path.stat()
+    require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) ==
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) and
+            len(raw) == before.st_size,
+            "Provisioner intake changed during read")
+    reject_redirected_path(path, "Provisioner intake")
+    return parse_json(raw)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -173,8 +198,9 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
 
 
 def check_artifact(path: Path) -> dict:
-    require(not path.is_symlink() and path.is_file() and
-            0 < path.stat().st_size < 100_000_000, "pinned EXE artifact unavailable")
+    reject_redirected_path(path, "Pinned EXE artifact")
+    require(path.is_file() and 0 < path.stat().st_size < 100_000_000,
+            "pinned EXE artifact unavailable")
     raw = path.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == ARTIFACT_SHA,
             "pinned ZIP SHA-256 mismatch")
@@ -196,9 +222,11 @@ def check_artifact(path: Path) -> dict:
     except (zipfile.BadZipFile, OSError, RuntimeError, EOFError) as exc:
         raise GateHold("invalid pinned ZIP") from exc
     # Parse the same snapshot that was hashed; reject path replacement races.
-    require(not path.is_symlink() and path.is_file() and
+    reject_redirected_path(path, "Pinned EXE artifact")
+    require(path.is_file() and
             hashlib.sha256(path.read_bytes()).hexdigest() == ARTIFACT_SHA,
             "pinned ZIP changed during verification")
+    reject_redirected_path(path, "Pinned EXE artifact")
     require(hashlib.sha256(exe).hexdigest() == EXE_SHA, "pinned EXE SHA mismatch")
     for record in (provenance, request):
         for key, expected in {"request_id": REQUEST_ID, "source_sha": SOURCE_SHA,
