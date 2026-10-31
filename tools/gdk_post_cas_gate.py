@@ -7,6 +7,7 @@ pinned EXE artifact rather than trusting its PASS-like status.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -76,6 +77,28 @@ def parse_json(data: bytes) -> dict:
         raise GateHold("invalid JSON input") from exc
     require(type(obj) is dict, "JSON root must be object")
     return obj
+
+
+def require_valid_provided_at(value: object) -> None:
+    """Match Provisioner's strict GDK Identity provenance timestamp gate.
+
+    A regex-shaped timestamp may still be an impossible date or in the future.
+    Preserve the original user-provided string without guessing or rewriting.
+    """
+    pattern = (
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+        r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})\Z"
+    )
+    require(type(value) is str and re.fullmatch(pattern, value) is not None,
+            "GDK Identity provided_at must be RFC3339 with timezone")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise GateHold("GDK Identity provided_at calendar date/time invalid") from exc
+    require(parsed.tzinfo is not None and parsed.utcoffset() is not None,
+            "GDK Identity provided_at timezone missing")
+    require(parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc) + timedelta(minutes=5),
+            "GDK Identity provided_at cannot be in the future")
 
 
 def reject_redirected_path(path: Path, label: str) -> None:
@@ -167,9 +190,7 @@ def check_git(repo: Path, cas: str, build: str) -> dict:
     require(type(approved.get("signature_status")) is str and
             approved["signature_status"] == "QA_UNSIGNED",
             "pinned EXE signature provenance must remain QA_UNSIGNED")
-    require(isinstance(approved.get("provided_at"), str) and bool(re.fullmatch(
-            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
-            approved["provided_at"])), "missing Identity provenance timestamp")
+    require_valid_provided_at(approved.get("provided_at"))
     require(git(repo, "rev-parse", cas + ":" + APPROVED_PATH) ==
             git(repo, "rev-parse", build + ":" + APPROVED_PATH),
             "post-CAS Identity bytes changed")
