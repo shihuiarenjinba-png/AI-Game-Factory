@@ -93,6 +93,10 @@ def require_valid_provided_at(value: object) -> None:
             "GDK Identity provided_at must be RFC3339 with timezone")
     # datetime.fromisoformat may normalize malformed offsets such as +09:99.
     # Reject invalid RFC3339 offset components without changing supplied data.
+    # RFC3339 -00:00 denotes an unknown offset, not UTC. An
+    # unverified timezone cannot establish operator provenance.
+    require(not value.endswith("-00:00"),
+            "GDK Identity provided_at timezone offset unknown")
     if value[-1] != "Z":
         hour, minute = int(value[-5:-3]), int(value[-2:])
         require(hour <= 23 and minute <= 59,
