@@ -1,5 +1,9 @@
 name: Signal Sprint immutable NEW build lineage (not CAS)
+# The PR-body one-shot is a manual launch path without touching main.
+# It does not authorize CAS or Store submission.
 on:
+  pull_request:
+    types: [edited]
   workflow_dispatch:
     inputs:
       build_id:
@@ -13,6 +17,15 @@ concurrency:
   cancel-in-progress: false
 jobs:
   windows-new-lineage:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.number == 15 &&
+       github.event.pull_request.head.repo.full_name == 'shihuiarenjinba-png/AI-Game-Factory' &&
+       github.event.pull_request.head.ref == 'codex/game-signal-sprint-new-lineage-20261102' &&
+       github.event.changes.body.from != null &&
+       contains(github.event.pull_request.body, '[signal-sprint-build-once]') &&
+       !contains(github.event.changes.body.from, '[signal-sprint-build-once]'))
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
@@ -20,6 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: control
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Checkout immutable GAME source by exact commit
         uses: actions/checkout@v4
@@ -38,7 +52,7 @@ jobs:
       - name: Verify immutable source and distinct control HEAD before building
         shell: pwsh
         env:
-          EXPECTED_CONTROL_HEAD: ${{ github.sha }}
+          EXPECTED_CONTROL_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           $sourceHead = (& git -C immutable-source rev-parse HEAD).Trim()
@@ -54,8 +68,8 @@ jobs:
       - name: Create independent new-lineage ZIP and fail-closed receipt
         shell: pwsh
         env:
-          NEW_BUILD_ID: ${{ inputs.build_id }}
-          BUILD_HEAD: ${{ github.sha }}
+          NEW_BUILD_ID: ${{ github.event_name == 'pull_request' && format('sprint-{0}', github.run_id) || inputs.build_id }}
+          BUILD_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           ACTION_RUN_ID: ${{ github.run_id }}
         run: |
           $ErrorActionPreference = 'Stop'
