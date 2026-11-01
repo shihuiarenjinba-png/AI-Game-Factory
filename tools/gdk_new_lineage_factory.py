@@ -100,11 +100,18 @@ def create_bundle(*, exe: Path, intake: dict, stage: Path, request_id: str,
         "source_branch": SOURCE_BRANCH, "source_repository": REPOSITORY,
         "source_factory": "AI-Game-Factory", "product_type": "GAME",
         "slug": "signal-sprint", "dry_run": True,
+        "display_name": "Signal Sprint - Offline Route Puzzle",
+        "target_owner": "shihuiarenjinba-png",
+        "requested_actions": [
+            "BUILD_WINDOWS", "INSPECT_PACKAGE",
+            "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN",
+        ],
+        "schema_version": "1.0",
     }
-    if not isinstance(intake, dict) or any(intake.get(k) != v for k, v in required.items()):
+    if (not isinstance(intake, dict) or set(intake) != set(required)
+            or any(type(intake.get(k)) is not type(v) or intake[k] != v
+                   for k, v in required.items())):
         hold("Provisioner intake mismatch / old request reuse")
-    if intake.get("schema_version") != "1.0":
-        hold("unexpected intake schema")
     if any((stage / name).exists() or (stage / name).is_symlink()
            for name in ("new-lineage.zip", "lineage-receipt.json", "provenance.json")):
         hold("existing output must not be overwritten")
