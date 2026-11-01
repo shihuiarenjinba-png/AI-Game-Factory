@@ -14,12 +14,21 @@ Artifact, or assert that the old EXE SHA authority conflict is resolved.
 
 ## New lineage contract
 
-`game-signal-sprint-new-lineage.yml` is **manual-only**. The workflow is
-intended for review and eventual explicit dispatch after an authorized
-workflow registration. GitHub generally requires a workflow_dispatch
-workflow to exist on the default branch; a Draft PR alone is not permission
-to merge or dispatch. No new Artifact is claimed until a real successful
-run is observed.
+`game-signal-sprint-new-lineage.yml` is **manual-only**. Its
+`workflow_dispatch` path cannot be assumed usable before default-branch
+registration (and this task does not authorize any main/release change).
+For this Draft PR, the separate one-shot `pull_request: edited` path
+can launch a Windows build without merging: on PR #15, add the exact
+`[signal-sprint-build-once]` token to the PR body **only after reviewing
+the HEAD and workflow**. The event must be a body edit transitioning from
+token absent to present, from the same repository and the exact PR branch.
+The job uses the immutable source commit and the PR HEAD separately;
+the build ID is `sprint-<GitHub run ID>`. Remove the token afterward
+to avoid a future accidental trigger. No automatic push/schedule build
+is authorized. This one-shot is not a GitHub `workflow_dispatch` event,
+so downstream evidence validation must explicitly support and authenticate
+its different event provenance before any CAS. No new Artifact is claimed
+until a real successful run and downloaded bytes are independently checked.
 
 A control/build checkout and the immutable source checkout are separate.
 The source checkout is pinned by commit, not branch. The new run uses
@@ -60,3 +69,20 @@ Do not change these claims merely because synthetic tests or CI pass.
 
 **Partner Center selection: GDK game.** Identity already received.
 No change to Windows-all-auto central ledger (36-minute owner).
+
+## Fail-closed downstream interop gap (2026-11-02)
+
+The current Repository-Provisioner-game PR #10 validator was designed
+before Factory PR #15 and **does not yet accept its output**. It requires
+a different reissue request/build ID format, a different workflow path and
+branch naming pattern, and a completed proposal containing a GitHub
+Artifact ID that cannot be known until after upload. It also expects
+`workflow_dispatch`, while this PR offers a guarded PR-body manual event.
+A GitHub Actions artifact wrapper ZIP digest is **not** the inner
+`new-lineage.zip` digest; comparing them as if identical is invalid.
+
+Therefore a successful Factory Windows build, if one occurs, is
+`NEW_LINEAGE_ARTIFACT_CREATED_NOT_CAS` only. The Provisioner evidence
+validator must be updated/tested for a two-phase upload receipt and the
+actual authenticated GitHub event before the downstream check-only gate
+can pass. Do not weaken the existing validator or mark CAS PASS.
