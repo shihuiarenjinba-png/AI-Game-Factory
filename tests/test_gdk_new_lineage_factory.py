@@ -31,6 +31,12 @@ class NewLineageTests(unittest.TestCase):
             "source_sha": m.SOURCE_SHA, "source_branch": m.SOURCE_BRANCH,
             "source_repository": m.REPOSITORY, "source_factory": "AI-Game-Factory",
             "product_type": "GAME", "slug": "signal-sprint", "dry_run": True,
+            "display_name": "Signal Sprint - Offline Route Puzzle",
+            "target_owner": "shihuiarenjinba-png",
+            "requested_actions": [
+                "BUILD_WINDOWS", "INSPECT_PACKAGE",
+                "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN",
+            ],
         }
 
     def context(self, **changes):
@@ -80,6 +86,33 @@ class NewLineageTests(unittest.TestCase):
                              ("source_branch", "main"), ("dry_run", False)):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, "intake mismatch"):
                 self.bundle(intake=dict(self.intake, **{field: value}))
+
+    def test_intake_type_spoofing_and_unapproved_fields_rejected(self):
+        for change in (
+            {"dry_run": 1},
+            {"requested_actions": ["BUILD_WINDOWS", "SUBMIT_STORE"]},
+            {"display_name": "Other Game"},
+            {"target_owner": "other"},
+            {"cas_return_pass": True},
+            {"github_evidence_verified": True},
+        ):
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "intake mismatch"):
+                self.bundle(intake=dict(self.intake, **change))
+
+    def test_missing_intake_fields_rejected(self):
+        for field in ("target_owner", "display_name", "requested_actions"):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "intake mismatch"):
+                self.bundle(intake={k: v for k, v in self.intake.items() if k != field})
+
+    def test_workflow_prebuild_and_receipt_guards(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/game-signal-sprint-new-lineage.yml").read_text()
+        self.assertLess(workflow.index("Verify immutable source and distinct control HEAD"),
+                        workflow.index("Build unsigned GAME EXE"))
+        for expected in ("source checkout dirty before build",
+                         "unproven evidence claim", "uploaded inner ZIP digest mismatch",
+                         "lineage identity mismatch"):
+            self.assertIn(expected, workflow)
 
     def test_bad_schema_rejected(self):
         with self.assertRaisesRegex(ValueError, "schema"):
