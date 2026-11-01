@@ -115,7 +115,7 @@ class NewLineageTests(unittest.TestCase):
             self.assertIn(expected, workflow)
 
     def test_bad_schema_rejected(self):
-        with self.assertRaisesRegex(ValueError, "schema"):
+        with self.assertRaisesRegex(ValueError, "intake mismatch"):
             self.bundle(intake=dict(self.intake, schema_version="2.0"))
 
     def test_source_head_branch_and_build_head_mismatch_rejected(self):
