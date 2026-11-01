@@ -35,6 +35,19 @@ jobs:
         run: |
           Set-Location control
           python -m unittest discover -s tests -p "test_gdk_new_lineage_factory.py" -v
+      - name: Verify immutable source and distinct control HEAD before building
+        shell: pwsh
+        env:
+          EXPECTED_CONTROL_HEAD: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceHead = (& git -C immutable-source rev-parse HEAD).Trim()
+          $controlHead = (& git -C control rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceHead -ne 'c058cbf7fe38e02d929c67d047d717ff74bd522e') { throw 'NEW_LINEAGE_HOLD: immutable source checkout mismatch' }
+          if ($controlHead -ne $env:EXPECTED_CONTROL_HEAD -or $controlHead -eq $sourceHead) { throw 'NEW_LINEAGE_HOLD: control/build HEAD mismatch' }
+          $dirty = & git -C immutable-source status --porcelain=v1 --untracked-files=all
+          if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'NEW_LINEAGE_HOLD: source checkout dirty before build' }
+          if ((Resolve-Path control).Path -eq (Resolve-Path immutable-source).Path) { throw 'NEW_LINEAGE_HOLD: overlapping checkouts' }
       - name: Build unsigned GAME EXE from immutable source only
         shell: pwsh
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File immutable-source/scripts/build-windows.ps1
@@ -52,6 +65,10 @@ jobs:
           python control/tools/gdk_new_lineage_factory.py --source-dir immutable-source --control-dir control --staging-dir $stage --build-id $env:NEW_BUILD_ID --run-id $env:ACTION_RUN_ID --build-head $env:BUILD_HEAD
           if ($LASTEXITCODE -ne 0) { throw 'NEW_LINEAGE_HOLD: receipt validation failed' }
           $receipt = Get-Content -LiteralPath (Join-Path $stage 'lineage-receipt.json') -Raw | ConvertFrom-Json
+          if ($receipt.request_id -eq 'game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e' -or $receipt.source_sha -ne 'c058cbf7fe38e02d929c67d047d717ff74bd522e' -or $receipt.build_head_sha -ne $env:BUILD_HEAD -or $receipt.github_run_id -ne [long]$env:ACTION_RUN_ID) { throw 'NEW_LINEAGE_HOLD: lineage identity mismatch' }
+          if ($receipt.github_evidence_verified -ne $false -or $null -ne $receipt.github_artifact_id -or $receipt.legacy_artifact_recovered -ne $false) { throw 'NEW_LINEAGE_HOLD: unproven evidence claim' }
+          $actualZip = (Get-FileHash -LiteralPath (Join-Path $stage 'new-lineage.zip') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($receipt.artifact_sha256 -ne $actualZip) { throw 'NEW_LINEAGE_HOLD: uploaded inner ZIP digest mismatch' }
           if ($receipt.cas_status -ne 'NOT_EXECUTED' -or $receipt.msixvc2_status -ne 'NOT_BUILT' -or $receipt.legacy_artifact_replaced -ne $false) { throw 'NEW_LINEAGE_HOLD: invalid phase' }
           "NEW_LINEAGE_STAGE=$stage" >> $env:GITHUB_ENV
       - name: Upload NEW lineage only (not old artifact or MSIXVC2)
