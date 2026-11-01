@@ -32,7 +32,7 @@ jobs:
           python-version: "3.12"
       - name: Test NEW lineage contract before build
         shell: pwsh
-        run: python -m unittest discover -s control/tests -p "test_gdk_new_lineage_factory.py" -v
+        run: |\n          Set-Location control\n          python -m unittest discover -s tests -p "test_gdk_new_lineage_factory.py" -v
       - name: Build unsigned GAME EXE from immutable source only
         shell: pwsh
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File immutable-source/scripts/build-windows.ps1
