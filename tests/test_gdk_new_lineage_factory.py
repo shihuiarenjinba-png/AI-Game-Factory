@@ -187,8 +187,13 @@ class NewLineageTests(unittest.TestCase):
         for expected in ("workflow_dispatch:", m.SOURCE_SHA,
                          "persist-credentials: false", "new-lineage.zip"):
             self.assertIn(expected, workflow)
-        for forbidden in ("schedule:", "pull_request:"):
-            self.assertNotIn(forbidden, workflow)
+        self.assertNotIn("schedule:", workflow)
+        self.assertIn("types: [edited]", workflow)
+        self.assertIn("github.event.pull_request.number == 15", workflow)
+        self.assertIn("github.event.changes.body.from != null", workflow)
+        self.assertIn("[signal-sprint-build-once]", workflow)
+        self.assertIn("github.event.pull_request.head.sha", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
 
 
 if __name__ == "__main__":
