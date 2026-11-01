@@ -1,0 +1,63 @@
+name: Signal Sprint immutable NEW build lineage (not CAS)
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "Unique new lineage build ID (8-32 lowercase characters/hyphens)"
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: signal-sprint-new-lineage-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  windows-new-lineage:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout control branch without credentials
+        uses: actions/checkout@v4
+        with:
+          path: control
+          persist-credentials: false
+      - name: Checkout immutable GAME source by exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: c058cbf7fe38e02d929c67d047d717ff74bd522e
+          path: immutable-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test NEW lineage contract before build
+        shell: pwsh
+        run: python -m unittest discover -s control/tests -p "test_gdk_new_lineage_factory.py" -v
+      - name: Build unsigned GAME EXE from immutable source only
+        shell: pwsh
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File immutable-source/scripts/build-windows.ps1
+      - name: Create independent new-lineage ZIP and fail-closed receipt
+        shell: pwsh
+        env:
+          NEW_BUILD_ID: ${{ inputs.build_id }}
+          BUILD_HEAD: ${{ github.sha }}
+          ACTION_RUN_ID: ${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP ("signal-sprint-new-lineage-" + $env:ACTION_RUN_ID)
+          if (Test-Path -LiteralPath $stage) { throw 'staging path already exists' }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          python control/tools/gdk_new_lineage_factory.py --source-dir immutable-source --control-dir control --staging-dir $stage --build-id $env:NEW_BUILD_ID --run-id $env:ACTION_RUN_ID --build-head $env:BUILD_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'NEW_LINEAGE_HOLD: receipt validation failed' }
+          $receipt = Get-Content -LiteralPath (Join-Path $stage 'lineage-receipt.json') -Raw | ConvertFrom-Json
+          if ($receipt.cas_status -ne 'NOT_EXECUTED' -or $receipt.msixvc2_status -ne 'NOT_BUILT' -or $receipt.legacy_artifact_replaced -ne $false) { throw 'NEW_LINEAGE_HOLD: invalid phase' }
+          "NEW_LINEAGE_STAGE=$stage" >> $env:GITHUB_ENV
+      - name: Upload NEW lineage only (not old artifact or MSIXVC2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-new-lineage-${{ github.run_id }}
+          path: |
+            ${{ env.NEW_LINEAGE_STAGE }}/new-lineage.zip
+            ${{ env.NEW_LINEAGE_STAGE }}/lineage-receipt.json
+          if-no-files-found: error
+          retention-days: 30
