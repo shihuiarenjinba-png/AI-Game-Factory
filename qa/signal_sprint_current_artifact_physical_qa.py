@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import sys
+import zipfile
 from pathlib import Path
 
 import signal_sprint_physical_pc_qa as base
@@ -32,7 +33,6 @@ def bundle_errors(bundle):
         errors = base.bundle_errors(bundle)
         if errors:
             return errors
-        import zipfile
         with zipfile.ZipFile(bundle) as archive:
             manifest = json.loads(archive.read("manifest.json"))
             if manifest.get("exe_sha256") in (OLD_QA_EXE_SHA, OLD_GDK_EXE_SHA):
@@ -62,8 +62,11 @@ def extended_errors(session, root):
     else:
         try:
             root = Path(root).resolve(strict=True)
-            f = (root / path).resolve(strict=True)
-            if not f.is_relative_to(root) or f.is_symlink() or f.stat().st_size > 20000000:
+            candidate = root / path
+            if candidate.is_symlink():
+                return sorted(set(errors + ["RESTART_SCREENSHOT_UNSAFE"]))
+            f = candidate.resolve(strict=True)
+            if not f.is_relative_to(root) or f.stat().st_size > 20000000:
                 errors.append("RESTART_SCREENSHOT_UNSAFE")
             elif base.digest(f) != restart.get("sha256"):
                 errors.append("RESTART_SCREENSHOT_TAMPERED")
