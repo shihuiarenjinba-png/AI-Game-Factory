@@ -131,8 +131,19 @@ jobs:
           import json
           import os
           from pathlib import Path
-          from urllib.request import Request, urlopen
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+          from urllib.parse import urlsplit
           from gdk_factory_lineage_adapter import check_live
+
+          class StripCrossHostAuthorization(HTTPRedirectHandler):
+              # GitHub's artifact endpoint redirects to a signed blob URL.
+              # Forwarding the GitHub Bearer token to that host causes HTTP 401
+              # and is unsafe. Preserve token only for api.github.com.
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+                  if redirected is not None and urlsplit(newurl).hostname != urlsplit(req.full_url).hostname:
+                      redirected.remove_header("Authorization")
+                  return redirected
 
           run_id = 41361263698
           artifact_id = 13105352227
@@ -145,7 +156,9 @@ jobs:
               "X-GitHub-Api-Version": "2022-11-28",
           }
           target = Path(os.environ["RUNNER_TEMP"]) / "signal-sprint-existing-outer-13105352227.zip"
-          with urlopen(Request(url, headers=headers, method="GET"), timeout=45) as response:
+          with build_opener(StripCrossHostAuthorization()).open(
+              Request(url, headers=headers, method="GET"), timeout=45
+          ) as response:
               archive = response.read(100_000_001)
           if not 0 < len(archive) <= 100_000_000:
               raise SystemExit("ARTIFACT_EXACT_BYTES_HOLD: outer ZIP missing/oversized")
