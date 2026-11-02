@@ -227,7 +227,7 @@ try {
     foreach ($element in $allText) {
       try { if ($element.Current.Name) { $names += [string]$element.Current.Name } } catch {}
     }
-    if (($names -join ' ') -match '失敗' -and ($names -join ' ') -match '手数がなくなりました') {
+    if (($names -join ' ') -match '\u5931\u6557' -and ($names -join ' ') -match '\u624b\u6570\u304c\u306a\u304f\u306a\u308a\u307e\u3057\u305f') {
       $receipt.lost_text_semantics = 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED'
     } else {
       $receipt.lost_text_semantics = 'HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED'
