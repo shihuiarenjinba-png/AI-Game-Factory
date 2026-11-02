@@ -1,0 +1,66 @@
+name: Signal Sprint separate UI revision Windows GUI evidence
+on:
+  push:
+    branches:
+      - codex/game-signal-sprint-ui-revision-20261102
+  pull_request:
+    branches:
+      - codex/game-signal-sprint-undo-20261027
+permissions:
+  contents: read
+jobs:
+  ubuntu-headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify immutable ancestor and run gameplay/UI unit tests
+        shell: bash
+        run: |
+          git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
+          python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+  windows-real-gui:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify source ancestry and unit tests
+        shell: pwsh
+        run: |
+          git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'IMMUTABLE_SOURCE_NOT_ANCESTOR' }
+          python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'UNIT_TESTS_FAILED' }
+      - name: Build real new-revision Windows EXE (never reuse old Artifact)
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller==6.16.0
+          if ($LASTEXITCODE -ne 0) { throw 'PYINSTALLER_INSTALL_FAILED' }
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name SignalSprint --distpath dist/game --workpath dist/work --specpath dist/spec products/signal-sprint/main.py
+          if ($LASTEXITCODE -ne 0) { throw 'REVISION_EXE_BUILD_FAILED' }
+          Get-FileHash dist/game/SignalSprint.exe -Algorithm SHA256
+      - name: Real 1024x768 GUI, taskbar work-area, Japanese toggle evidence
+        shell: powershell
+        run: |
+          & .\qa\signal_sprint_ui_revision_gui.ps1 -ExePath .\dist\game\SignalSprint.exe -ReceiptPath .\evidence\ui-revision-receipt.json -ScreenshotDir .\evidence\screenshots
+          if ($LASTEXITCODE -ne 0) { throw "REAL_GUI_CHECK_ONLY_HOLD: $LASTEXITCODE" }
+      - name: Upload GUI evidence even on HOLD
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-ui-revision-real-gui
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
