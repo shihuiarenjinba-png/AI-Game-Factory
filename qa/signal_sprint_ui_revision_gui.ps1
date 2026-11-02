@@ -2,7 +2,8 @@
 param(
   [Parameter(Mandatory=$true)][string]$ExePath,
   [Parameter(Mandatory=$true)][string]$ReceiptPath,
-  [Parameter(Mandatory=$true)][string]$ScreenshotDir
+  [Parameter(Mandatory=$true)][string]$ScreenshotDir,
+  [ValidateSet(100,125,150)][int]$TargetDpiPercent = 100
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -20,6 +21,18 @@ $receipt = [ordered]@{
   work_area_bounds = $null
   window_bounds = $null
   dpi_percent = $null
+  target_dpi_percent = $TargetDpiPercent
+  en_window_sha256 = $null
+  en_after_input_window_sha256 = $null
+  en_pre_exhaustion_window_sha256 = $null
+  en_exhausted_window_sha256 = $null
+  en_post_exhaustion_restart_window_sha256 = $null
+  en_replay_window_sha256 = $null
+  en_exhaustion_move_count = 0
+  en_exhaustion_input_sequence = $null
+  en_exhaustion_gui_check_only = 'HOLD_NOT_EXECUTED'
+  en_lost_text_semantics = 'HOLD_UNVERIFIED'
+  language_matrix_status = 'HOLD_NOT_EXECUTED'
   jp_window_title_observed = $false
   en_screenshot_sha256 = $null
   jp_screenshot_sha256 = $null
@@ -154,7 +167,7 @@ try {
   try { $receipt.dpi_percent = [int][math]::Round($g.DpiX / 96.0 * 100) }
   finally { $g.Dispose() }
   Assert ($monitor.Width -eq 1024 -and $monitor.Height -eq 768) 'NOT_1024x768_REAL_MONITOR'
-  Assert ($receipt.dpi_percent -eq 100) 'DPI_COORDINATES_UNVERIFIED_125_150_HOLD'
+  Assert ($receipt.dpi_percent -eq $TargetDpiPercent) 'REAL_GUI_DPI_NOT_REQUESTED_TARGET_HOLD'
   Assert ($win.Width -gt 700 -and $win.Height -gt 500) 'WINDOW_UNEXPECTEDLY_SMALL'
   Assert ($win.Left -ge $work.Left -and $win.Top -ge $work.Top -and
           $win.Right -le $work.Right -and $win.Bottom -le $work.Bottom) 'WINDOW_OUTSIDE_WORK_AREA'
@@ -246,10 +259,68 @@ try {
   $receipt.replay_window_sha256 = Capture-Window 'signal-sprint-jp-after-lost-replay-right.png' $replayRect
   $receipt.replay_pixel_match = ($receipt.replay_window_sha256 -eq $receipt.after_input_window_sha256)
   Assert ($receipt.replay_pixel_match) 'EXHAUSTION_REPLAY_FIRST_MOVE_MISMATCH'
+  # Independent EN 30-turn exhaustion, restart and replay in the SAME process
+  # and same packaged EXE. The JP screenshots above are never relabeled EN.
+  Press-Key 'j' $guiProcess.Id
+  Assert ($window.Current.Name -eq 'Signal Sprint | EN') 'ENGLISH_TOGGLE_NOT_OBSERVED'
+  Press-Key 'r' $guiProcess.Id
+  $enRect = $window.Current.BoundingRectangle
+  Assert ($enRect.Left -ge $work.Left -and $enRect.Top -ge $work.Top -and
+          $enRect.Right -le $work.Right -and $enRect.Bottom -le $work.Bottom) 'EN_INITIAL_OUTSIDE_WORK_AREA'
+  $receipt.en_window_sha256 = Capture-Window 'signal-sprint-en-window-initial.png' $enRect
+  Press-Key '{RIGHT}' $guiProcess.Id
+  $receipt.en_after_input_window_sha256 = Capture-Window 'signal-sprint-en-window-after-right.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_after_input_window_sha256 -ne $receipt.en_window_sha256) 'EN_FIRST_MOVE_NO_CHANGE'
+  Press-Key 'r' $guiProcess.Id
+  $enReset = Capture-Window 'signal-sprint-en-window-before-exhaustion.png' $window.Current.BoundingRectangle
+  Assert ($enReset -eq $receipt.en_window_sha256) 'EN_PRE_EXHAUSTION_RESET_MISMATCH'
+  $enSequence = @()
+  for ($turn = 1; $turn -le 30; $turn++) {
+    $key = if ($turn % 2 -eq 1) { '{RIGHT}' } else { '{LEFT}' }
+    Press-Key $key $guiProcess.Id
+    $enSequence += $(if ($turn % 2 -eq 1) { 'RIGHT' } else { 'LEFT' })
+    $guiProcess.Refresh()
+    Assert (-not $guiProcess.HasExited) 'EN_EXHAUSTION_PROCESS_EXITED'
+    $current = $window.Current.BoundingRectangle
+    Assert ($current.Left -ge $work.Left -and $current.Top -ge $work.Top -and
+            $current.Right -le $work.Right -and $current.Bottom -le $work.Bottom) 'EN_EXHAUSTION_OUTSIDE_WORK_AREA'
+    Assert ($window.Current.Name -eq 'Signal Sprint | EN') 'EN_EXHAUSTION_LANGUAGE_CHANGED'
+    if ($turn -eq 29) {
+      $receipt.en_pre_exhaustion_window_sha256 = Capture-Window 'signal-sprint-en-turn-29.png' $current
+    }
+  }
+  $receipt.en_exhaustion_input_sequence = $enSequence
+  $receipt.en_exhaustion_move_count = $enSequence.Count
+  Assert ($receipt.en_exhaustion_move_count -eq 30) 'EN_MOVE_COUNT_WRONG'
+  $receipt.en_exhausted_window_sha256 = Capture-Window 'signal-sprint-en-turn-30-expected-lost.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_exhausted_window_sha256 -ne $receipt.en_pre_exhaustion_window_sha256) 'EN_LAST_MOVE_NO_PIXEL_CHANGE'
+  try {
+    $allText = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition)
+    $names = @()
+    foreach ($element in $allText) {
+      try { if ($element.Current.Name) { $names += [string]$element.Current.Name } } catch {}
+    }
+    if (($names -join ' ') -match 'LOST' -and ($names -join ' ') -match 'Out of moves') {
+      $receipt.en_lost_text_semantics = 'UIAUTOMATION_EN_LOST_TEXT_OBSERVED'
+    } else {
+      $receipt.en_lost_text_semantics = 'HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED'
+    }
+  } catch { $receipt.en_lost_text_semantics = 'HOLD_UIAUTOMATION_UNAVAILABLE' }
+  Press-Key 'r' $guiProcess.Id
+  $receipt.en_post_exhaustion_restart_window_sha256 = Capture-Window 'signal-sprint-en-after-lost-restart.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_post_exhaustion_restart_window_sha256 -eq $receipt.en_window_sha256) 'EN_R_DID_NOT_RESTORE_INITIAL_PIXELS'
+  Press-Key '{RIGHT}' $guiProcess.Id
+  $receipt.en_replay_window_sha256 = Capture-Window 'signal-sprint-en-after-lost-replay-right.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_replay_window_sha256 -eq $receipt.en_after_input_window_sha256) 'EN_REPLAY_FIRST_MOVE_MISMATCH'
+  $receipt.en_exhaustion_gui_check_only = 'REAL_EN_30_KEYS_RESTART_REPLAY_CHECK_ONLY'
+  $receipt.language_matrix_status = 'REAL_JP_AND_EN_SAME_EXE_CHECK_ONLY'
+  # Visible pixels and bounds do not prove that all glyphs are legible.
+  # UIAutomation may not expose Tk labels. Keep text clipping HOLD.
   # DPI 125/150 and actual JP/EN glyph clipping need separate real runs.
   # Never infer these PASS from 100% DPI or from synthetic geometry.
   $receipt.status = 'GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY'
-  $receipt.reason = 'REAL_30_INPUTS_RESTART_REPLAY_SCREENSHOTS_CHECK_ONLY; LOST_TEXT_AND_DPI_125_150_AND_GLYPH_CLIPPING_HOLD'
+  $receipt.reason = 'REAL_JP_EN_30_INPUTS_RESTART_REPLAY_CHECK_ONLY; UIA_TEXT_AND_GLYPH_CLIPPING_HOLD; OTHER_OS_DPI_NOT_INFERRED'
 } catch {
   $receipt.status = 'GUI_CHECK_ONLY_HOLD'
   $receipt.reason = [string]$_.Exception.Message
