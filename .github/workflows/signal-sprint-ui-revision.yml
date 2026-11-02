@@ -3,9 +3,11 @@ on:
   push:
     branches:
       - codex/game-signal-sprint-ui-revision-20261102
+      - codex/game-signal-sprint-physical-qa-bundle-20261103
   pull_request:
     branches:
       - codex/game-signal-sprint-undo-20261027
+      - codex/game-signal-sprint-ui-revision-20261102
 env:
   SIGNAL_SPRINT_REVISION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 permissions:
@@ -130,6 +132,22 @@ jobs:
             $probe = Get-Content "evidence/dpi-$dpi-probe.json" -Raw | ConvertFrom-Json
             Write-Host "REAL_OS_DPI_$dpi STATUS=$($probe.status) OBSERVED=$($probe.os_system_dpi_percent) GRAPHICS=$($probe.graphics_dpi_percent) EXE=$($probe.exe_sha256)"
           }
+      - name: Bundle the EXACT real GUI-executed EXE for separate physical human QA (not GDK)
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_physical_qa_bundle.py --mode build --exe dist/game/SignalSprint.exe --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --revision $env:SIGNAL_SPRINT_REVISION_SHA --run-id $env:GITHUB_RUN_ID --bundle qa-physical-bundle/SignalSprint-physical-qa.zip
+          if ($LASTEXITCODE -ne 0) { throw 'SAME_EXECUTED_EXE_BUNDLE_BUILD_HOLD' }
+          python qa/signal_sprint_physical_qa_bundle.py --mode verify --exe dist/game/SignalSprint.exe --revision $env:SIGNAL_SPRINT_REVISION_SHA --run-id $env:GITHUB_RUN_ID --bundle qa-physical-bundle/SignalSprint-physical-qa.zip
+          if ($LASTEXITCODE -ne 0) { throw 'SAME_EXECUTED_EXE_BUNDLE_VERIFY_HOLD' }
+          Get-FileHash qa-physical-bundle/SignalSprint-physical-qa.zip -Algorithm SHA256
+      - name: Upload separate byte-identical physical QA EXE bundle (NOT GDK package)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-physical-qa-executed-exe
+          path: qa-physical-bundle/SignalSprint-physical-qa.zip
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload GUI evidence even on HOLD
         if: always()
         uses: actions/upload-artifact@v4
