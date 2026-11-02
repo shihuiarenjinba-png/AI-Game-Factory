@@ -52,9 +52,21 @@ def verify_receipt(receipt, screenshot_dir, expected_revision=None, expected_exe
     for field in ("human_qa_pass", "sale_ready", "cas_return_pass", "gdk_sdk_executed",
                   "msixvc2_built", "store_submitted"):
         require(receipt.get(field) is False, "FORBIDDEN_SUCCESS_CLAIM_" + field)
-    for field in ("dpi_125", "dpi_150", "jp_en_text_clipping"):
-        require(str(receipt.get(field, "")).startswith("HOLD_"), "UNMEASURED_FALSE_PASS_" + field)
-    require(receipt.get("dpi_125_150") == "HOLD_NOT_TESTED", "DPI_FALSE_PASS")
+    # A single real OS DPI run can prove only its own target; the other
+    # scale stays HOLD. This verifier does not replace the independent OS probe.
+    target_dpi = receipt.get("target_dpi_percent", 100)
+    for dpi in (125, 150):
+        field = "dpi_" + str(dpi)
+        if target_dpi == dpi and receipt.get("dpi_percent") == dpi:
+            require(receipt.get(field) == "REAL_OS_DPI_" + str(dpi) + "_GUI_CHECK_ONLY",
+                    "DPI_MEASURED_LABEL_INVALID_" + field)
+        else:
+            require(str(receipt.get(field, "")).startswith("HOLD_"),
+                    "UNMEASURED_FALSE_PASS_" + field)
+    require(str(receipt.get("jp_en_text_clipping", "")).startswith("HOLD_"),
+            "UNMEASURED_FALSE_PASS_jp_en_text_clipping")
+    expected_matrix_hold = "HOLD_NOT_TESTED" if target_dpi == 100 else "HOLD_OTHER_DPI_NOT_TESTED"
+    require(receipt.get("dpi_125_150") == expected_matrix_hold, "DPI_FALSE_PASS")
     require(receipt.get("lost_text_semantics") in (
         "UIAUTOMATION_JP_LOST_TEXT_OBSERVED",
         "HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED",
