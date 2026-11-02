@@ -4,12 +4,12 @@ on:
     branches:
       - codex/game-signal-sprint-ui-revision-20261102
       - codex/game-signal-sprint-physical-qa-bundle-20261103
-      - codex/game-signal-sprint-physical-qa-bundle-20261103
       - codex/signal-sprint-current-artifact-physical-qa-20261103
   pull_request:
     branches:
       - codex/game-signal-sprint-undo-20261027
       - codex/game-signal-sprint-ui-revision-20261102
+      - codex/game-signal-sprint-physical-qa-bundle-20261103
 env:
   SIGNAL_SPRINT_REVISION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 permissions:
