@@ -103,5 +103,26 @@ class PhysicalPcQaReceiptTests(unittest.TestCase):
         self.assertIn("THREE_SCREENSHOTS_REQUIRED", self.errors())
 
 
+    def test_new_gui_bundle_cannot_masquerade_as_old_pinned_physical_qa(self):
+        # Observed GitHub Artifact #13167801977 (run #41498959569), NOT the
+        # pinned physical-PC protocol Artifact #13164091404.
+        session = self.sessions[0]
+        session.update({
+            "artifact_id": 13167801977,
+            "workflow_run_id": "41498959569",
+            "build_head_sha": "f5bc1e0d495bdcd65bf25fa370d7e68ef415d323",
+            "exe_sha256": "b17424ba8b0954162a1087e7db90cdcb34ca1c30e0a992da53ff61cd17f63ad4",
+            "exe_size_bytes": 11445122,
+        })
+        session["os_observation"].update({
+            "running_exe_sha256": session["exe_sha256"],
+            "running_exe_size_bytes": session["exe_size_bytes"],
+        })
+        errors = check_session(session, self.root)
+        for key in ("artifact_id", "workflow_run_id", "build_head_sha",
+                    "exe_sha256", "exe_size_bytes"):
+            self.assertIn("LINEAGE_" + key, errors)
+        self.assertIn("RUNNING_EXE_WRONG", errors)
+
 if __name__ == "__main__":
     unittest.main()
