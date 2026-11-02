@@ -4,15 +4,22 @@ This module deliberately does not launch executables, change DPI, bypass Code
 Integrity, build GDK packages, perform CAS, or claim physical QA PASS.
 """
 import argparse
+import importlib.util
 import hashlib
 import json
 import sys
 import zipfile
 from pathlib import Path
 
-import signal_sprint_physical_pc_qa as base
+# Load an isolated copy so this profile NEVER mutates the old pinned protocol
+# when both test modules are imported in the same unittest process.
+_spec = importlib.util.spec_from_file_location(
+    "_signal_sprint_current_artifact_base",
+    Path(__file__).with_name("signal_sprint_physical_pc_qa.py"))
+base = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(base)
 
-# Dedicated process/profile. Do not modify the legacy pinned QA protocol.
+# Dedicated isolated profile; original module remains untouched.
 base.ARTIFACT_ID = 13180405918
 base.RUN = "41525954534"
 base.HEAD = "15b666871eb6749133df671ca1b271d89ecdf3ae"
