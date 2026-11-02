@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "product": "Signal Sprint",
+  "registration": "GDK_GAME",
+  "partner_center_route": "GDK game",
+  "evidence_kind": "HUMAN_FIRST_30_SECONDS_QA_PLAN_NOT_EXECUTED",
+  "immutable_source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "pinned_revision_sha": "8e6a8c10a2678b76a2eddc897e5fea8cf7d5dc98",
+  "pinned_windows_run_id": "41470116296",
+  "pinned_artifact_id": "13154872780",
+  "artifact_url": "https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/41470116296/artifacts/13154872780",
+  "source_receipt": "evidence/ui-revision-receipt.json",
+  "exe_sha256_binding": "read_full_64_hex_from_source_receipt_and_hash_actual_exe",
+  "exe_availability": "GUI_EVIDENCE_ARTIFACT_UPLOADS_EVIDENCE_ONLY; SAME_EXE_NOT_YET_SUPPLIED_FOR_PHYSICAL_HUMAN_QA",
+  "reference_display": {
+    "monitor": [
+      0,
+      0,
+      1024,
+      768
+    ],
+    "work_area": [
+      0,
+      0,
+      1024,
+      720
+    ],
+    "window": [
+      16,
+      16,
+      932,
+      675
+    ],
+    "measured_os_dpi_percent": 100,
+    "dpi_125": "HOLD_NOT_PHYSICALLY_MEASURED",
+    "dpi_150": "HOLD_NOT_PHYSICALLY_MEASURED"
+  },
+  "screenshots": {
+    "en_initial": {
+      "file": "signal-sprint-en-window-initial.png",
+      "sha_receipt_field": "en_window_sha256",
+      "expected_visible": [
+        "Collect 3 energy cells, then reach EXIT.",
+        "Arrows / WASD / click adjacent tile",
+        "Moves left: 30",
+        "Restart (R)"
+      ]
+    },
+    "jp_initial": {
+      "file": "signal-sprint-jp-window-initial.png",
+      "sha_receipt_field": "jp_window_sha256",
+      "expected_visible": [
+        "3つのエネルギーを集めて出口に到達しよう。",
+        "矢印 / WASD / 隣のマスをクリック",
+        "残り手数: 30",
+        "最初から (R)"
+      ]
+    },
+    "en_lost": {
+      "file": "signal-sprint-en-turn-30-expected-lost.png",
+      "sha_receipt_field": "en_exhausted_window_sha256",
+      "expected_visible": [
+        "LOST",
+        "Out of moves. Press R to retry.",
+        "Moves left: 0"
+      ]
+    },
+    "jp_lost": {
+      "file": "signal-sprint-jp-turn-30-expected-lost.png",
+      "sha_receipt_field": "exhausted_window_sha256",
+      "expected_visible": [
+        "失敗",
+        "手数がなくなりました。Rで再挑戦。",
+        "残り手数: 0"
+      ]
+    },
+    "en_replay": {
+      "file": "signal-sprint-en-after-lost-replay-right.png",
+      "sha_receipt_field": "en_replay_window_sha256",
+      "expected_visible": [
+        "PLAYING",
+        "Moves left: 29"
+      ]
+    },
+    "jp_replay": {
+      "file": "signal-sprint-jp-after-lost-replay-right.png",
+      "sha_receipt_field": "replay_window_sha256",
+      "expected_visible": [
+        "プレイ中",
+        "残り手数: 29"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "blind_start",
+      "instruction": "Do not explain rules. Start a 30-second stopwatch at first visible frame; tester independently says goal, controls and retry. Record exact spoken answer and time per answer.",
+      "pass_if": "Tester identifies 3 cells then EXIT, movement by arrows/WASD or adjacent click, and R restart within 30 seconds WITHOUT prompting.",
+      "fail_if": "Any goal/control/retry omitted, misunderstood, prompted or learned only after 30 seconds."
+    },
+    {
+      "id": "en_initial",
+      "instruction": "Review English initial screenshot AND the real executable, including subtitle, counters, message and five buttons.",
+      "pass_if": "Every required English phrase is fully legible, no glyph truncation, and all buttons are clickable.",
+      "fail_if": "Ellipsis, missing glyph, clipped button, overlap, invisible control or unreadable font."
+    },
+    {
+      "id": "jp_initial",
+      "instruction": "Press J; review Japanese initial screenshot AND real executable. Confirm JP translation and persistent language while moving.",
+      "pass_if": "All required Japanese text is fully readable, goal/control/retry correctly conveyed and title is Signal Sprint | JP.",
+      "fail_if": "Untranslated critical instruction, tofu/missing glyph, overflow, truncated counter or language resets on movement."
+    },
+    {
+      "id": "bounds",
+      "instruction": "Measure physical 1024x768 monitor, Windows taskbar work area and game window rectangle; capture uncropped monitor screenshot.",
+      "pass_if": "Actual window and all visible information/buttons fit within actual work area, not merely full monitor.",
+      "fail_if": "Any control/text outside work area or covered by taskbar; no real rectangle/screenshot evidence."
+    },
+    {
+      "id": "en_loss_replay",
+      "instruction": "In EN make 30 legal RIGHT/LEFT moves, observe LOST, press R, make one RIGHT move.",
+      "pass_if": "LOST + 0 moves is legible, R returns to 30 moves, replay shows 29 and responds.",
+      "fail_if": "Crash, freeze, no LOST, no R reset, misleading status, no replay or clipped text."
+    },
+    {
+      "id": "jp_loss_replay",
+      "instruction": "Repeat 30 legal moves in JP on the SAME EXE; verify 失敗, R reset, next move.",
+      "pass_if": "失敗 + 残り手数0 legible; R restores 30, next move 29; no JP clipping.",
+      "fail_if": "Missing Japanese state text, R failure, language drift or unresponsive controls."
+    },
+    {
+      "id": "negative_cases",
+      "instruction": "Explicitly check blocked move does not falsely decrement, focus loss/no input is not marked success, and intentionally wrong EXE/SHA or clipped screenshots are rejected by evidence gate.",
+      "pass_if": "All negative outcomes recorded with actual observation or test reference; no synthetic screenshot is called human PASS.",
+      "fail_if": "Any negative case untested or reported PASS without evidence."
+    },
+    {
+      "id": "consumer_value",
+      "instruction": "Ask first-time tester without coaching: Was goal clear? Would you voluntarily play another round, and why? Record verbatim reason.",
+      "pass_if": "Unprompted comprehension and an actual reason to replay are documented; this is qualitative only.",
+      "fail_if": "No independent tester, only developer judgement, or no reason to replay."
+    }
+  ],
+  "negative_cases": [
+    "WRONG_GUI_EXE_SHA",
+    "OLD_IMMUTABLE_ARTIFACT_SUBSTITUTED",
+    "WINDOW_OVER_TASKBAR",
+    "SCREENSHOT_SHA_CHANGED",
+    "MISSING_JP_GLYPH",
+    "MISSING_EN_STATUS",
+    "UNRESPONSIVE_R",
+    "PROMPTED_30_SECOND_ANSWER",
+    "FALSE_DPI_125_150_PASS",
+    "ORDINARY_MSIX_ROUTE",
+    "UNAPPROVED_GDK_ASSET_VERSION_SDK_PASS"
+  ],
+  "human_observation_template": {
+    "status": "HOLD_NOT_EXECUTED",
+    "tester": "",
+    "device": "",
+    "time_started": "",
+    "exe_sha256": "",
+    "source_receipt_verified": false,
+    "reference_screenshot_sha_verified": false,
+    "os_dpi_percent": null,
+    "language_results": {
+      "EN": "HOLD",
+      "JP": "HOLD"
+    },
+    "step_results": {},
+    "verbatim_first30": "",
+    "verbatim_replay_reason": "",
+    "physical_screenshot_paths": [],
+    "human_qa_pass": false,
+    "sale_ready": false
+  },
+  "release_gates": {
+    "human_qa_pass": false,
+    "real_os_dpi_125_pass": false,
+    "real_os_dpi_150_pass": false,
+    "cas_approved": false,
+    "gdk_sdk_executed": false,
+    "msixvc2_built": false,
+    "sale_ready": false
+  },
+  "notes": "Reference screenshot geometry and pixel ROI are CHECK_ONLY, not proof of text semantics. The pinned GUI evidence artifact uploads evidence/ only, not the EXE. Obtain a byte-identical EXE and verify SHA before physical QA. Never promote review EXE to GDK package EXE. Human test must use an independent first-time tester; record HOLD if unavailable."
+}
