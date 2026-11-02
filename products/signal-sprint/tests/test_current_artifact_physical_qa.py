@@ -3,6 +3,7 @@ import copy
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from PIL import Image
@@ -90,6 +91,18 @@ class CurrentPhysicalQaTests(unittest.TestCase):
     def test_wrong_gui_artifact_rejected(self):
         self.s["gui_artifact_id"] = 13164091404
         self.assertIn("GUI_ARTIFACT_BINDING_MISMATCH", self.errors())
+
+    def test_modified_or_legacy_zip_rejected_before_manifest(self):
+        archive = self.root / "wrong-artifact.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("manifest.json", "{}")
+        self.assertIn("CURRENT_QA_ARTIFACT_ZIP_SHA_MISMATCH", current.bundle_errors(archive))
+
+    def test_original_source_request_binding_rejected(self):
+        self.s["immutable_source_sha"] = "f" * 40
+        self.s["original_request_id"] = "forged-request"
+        self.assertIn("LINEAGE_immutable_source_sha", self.errors())
+        self.assertIn("LINEAGE_original_request_id", self.errors())
 
     def test_no_bundle_is_physical_hold(self):
         absent = self.root / "not-an-artifact.zip"
