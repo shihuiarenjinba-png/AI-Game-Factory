@@ -17,7 +17,7 @@ class UIRevisionTests(unittest.TestCase):
         self.assertLessEqual(h + 80, 720)
 
     def test_rejects_unsupported_work_area(self):
-        for area in ((800, 600), (1024, 599), (839, 720)):
+        for area in ((800, 600), (1024, 599), (839, 720), (840, 600)):
             with self.subTest(area=area), self.assertRaises(ValueError):
                 game_module.ui_window_size(*area)
 
