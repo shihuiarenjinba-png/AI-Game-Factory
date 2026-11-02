@@ -178,7 +178,7 @@ def verify_real(archive: Path, revision: str, run_id: str, expected_exe: Path | 
         from signal_sprint_bilingual_receipt import verify_bilingual
         visual_errors, _ = visibility(receipt, root / "screenshots", revision, run_id, root / "SignalSprint.exe")
         errors.extend(visual_errors)
-        errors.extend(verify_bilingual(receipt, root / "screenshots", revision, root / "SignalSprint.exe"))
+        errors.extend(verify_bilingual(receipt, root / "screenshots", revision, manifest["exe_sha256"]))
     return sorted(set(errors))
 
 
@@ -195,7 +195,7 @@ def build_bundle(exe: Path, receipt_path: Path, screenshots: Path,
     from signal_sprint_visibility_receipt import verify as visibility
     from signal_sprint_bilingual_receipt import verify_bilingual
     visual_errors, _ = visibility(receipt, screenshots, revision, run_id, exe)
-    errors = visual_errors + verify_bilingual(receipt, screenshots, revision, exe)
+    errors = visual_errors + verify_bilingual(receipt, screenshots, revision, receipt["exe_sha256"])
     if errors:
         return sorted(set(errors))
     files = []
