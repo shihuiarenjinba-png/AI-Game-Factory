@@ -1,0 +1,140 @@
+name: Signal Sprint separate UI revision Windows GUI evidence
+on:
+  push:
+    branches:
+      - codex/game-signal-sprint-ui-revision-20261102
+  pull_request:
+    branches:
+      - codex/game-signal-sprint-undo-20261027
+env:
+  SIGNAL_SPRINT_REVISION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+permissions:
+  contents: read
+jobs:
+  ubuntu-headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout exact public Provisioner-game PR53 for read-only contract audit
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: external-provisioner
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned screenshot audit dependency
+        run: python -m pip install --disable-pip-version-check Pillow==11.3.0
+      - name: Verify immutable ancestor and run gameplay/UI unit tests
+        shell: bash
+        run: |
+          git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
+          test "$(git rev-parse HEAD)" = "$SIGNAL_SPRINT_REVISION_SHA"
+          python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+      - name: Audit exact PR53 GDK staging contract read-only (not GDK READY)
+        shell: bash
+        run: |
+          python qa/signal_sprint_gdk_review_gate.py --provisioner-checkout external-provisioner --contract-only --output evidence/pr53-contract-only.json
+  windows-real-gui:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout exact public Provisioner-game PR53 for read-only contract audit
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: external-provisioner
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned screenshot audit dependency
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check Pillow==11.3.0
+          if ($LASTEXITCODE -ne 0) { throw 'PILLOW_INSTALL_FAILED' }
+      - name: Verify source ancestry and unit tests
+        shell: pwsh
+        run: |
+          git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'IMMUTABLE_SOURCE_NOT_ANCESTOR' }
+          if ((git rev-parse HEAD).Trim() -cne $env:SIGNAL_SPRINT_REVISION_SHA) { throw 'REVISION_HEAD_DRIFT' }
+          python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'UNIT_TESTS_FAILED' }
+      - name: Audit exact PR53 GDK staging contract read-only (not GDK READY)
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_gdk_review_gate.py --provisioner-checkout external-provisioner --contract-only --output evidence/pr53-contract-only.json
+          if ($LASTEXITCODE -ne 0) { throw 'PR53_SOURCE_CONTRACT_HOLD' }
+      - name: Build real new-revision Windows EXE (never reuse old Artifact)
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller==6.16.0
+          if ($LASTEXITCODE -ne 0) { throw 'PYINSTALLER_INSTALL_FAILED' }
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name SignalSprint --distpath dist/game --workpath dist/work --specpath dist/spec products/signal-sprint/main.py
+          if ($LASTEXITCODE -ne 0) { throw 'REVISION_EXE_BUILD_FAILED' }
+          Get-FileHash dist/game/SignalSprint.exe -Algorithm SHA256
+      - name: Real 1024x768 GUI, taskbar work-area, Japanese toggle evidence
+        shell: powershell
+        run: |
+          & .\qa\signal_sprint_ui_revision_gui.ps1 -ExePath .\dist\game\SignalSprint.exe -ReceiptPath .\evidence\ui-revision-receipt.json -ScreenshotDir .\evidence\screenshots
+          if ($LASTEXITCODE -ne 0) { throw "REAL_GUI_CHECK_ONLY_HOLD: $LASTEXITCODE" }
+      - name: Verify same-EXE 30-move receipt and screenshot SHA bindings
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_exhaustion_receipt.py --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --revision $env:SIGNAL_SPRINT_REVISION_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'REAL_EXHAUSTION_RECEIPT_HOLD' }
+      - name: Verify JP and EN same-EXE 30-move GUI and screenshot bounds
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_bilingual_receipt.py --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --revision $env:SIGNAL_SPRINT_REVISION_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'BILINGUAL_REAL_GUI_RECEIPT_HOLD' }
+      - name: Check actual JP/EN initial and lost screenshot ROIs against EXE and run
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_visibility_receipt.py --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --revision $env:SIGNAL_SPRINT_REVISION_SHA --run-id $env:GITHUB_RUN_ID --exe dist/game/SignalSprint.exe --output evidence/visibility-roi-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw 'REAL_GUI_VISIBILITY_ROI_HOLD' }
+      - name: Bind real UI review EXE and screenshot receipt to PR53 GDK staging contract (HOLD expected)
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_gdk_review_gate.py --provisioner-checkout external-provisioner --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --exe dist/game/SignalSprint.exe --revision $env:SIGNAL_SPRINT_REVISION_SHA --run-id $env:GITHUB_RUN_ID --output evidence/review-vs-gdk-lineage.json
+          if ($LASTEXITCODE -ne 0) { throw 'REVIEW_VS_GDK_LINEAGE_CONFLICT' }
+          $gate = Get-Content evidence/review-vs-gdk-lineage.json -Raw | ConvertFrom-Json
+          if ($gate.status -cne 'REVIEW_GUI_CHECK_ONLY_GDK_STAGING_HOLD' -or $gate.real_msixvc_built -or $gate.sale_ready) { throw 'GDK_PACKAGE_FALSE_READY' }
+      - name: Probe actual Windows OS DPI 125 and 150 with the SAME EXE
+        shell: powershell
+        run: |
+          foreach ($dpi in @(125,150)) {
+            & .\qa\signal_sprint_dpi_matrix_probe.ps1 -ExePath .\dist\game\SignalSprint.exe -BaseReceiptPath .\evidence\ui-revision-receipt.json -ProbeReceiptPath ".\evidence\dpi-$dpi-probe.json" -ScreenshotDir ".\evidence\screenshots\dpi-$dpi" -TargetDpiPercent $dpi
+            if ($LASTEXITCODE -ne 0) { throw "DPI_PROBE_EXECUTION_FAILED_$dpi" }
+          }
+      - name: Validate fail-closed OS DPI evidence (HOLD is not DPI PASS)
+        shell: pwsh
+        run: |
+          foreach ($dpi in @(125,150)) {
+            python qa/signal_sprint_dpi_matrix_receipt.py --probe "evidence/dpi-$dpi-probe.json" --base evidence/ui-revision-receipt.json --revision $env:SIGNAL_SPRINT_REVISION_SHA --screenshots "evidence/screenshots/dpi-$dpi"
+            if ($LASTEXITCODE -ne 0) { throw "DPI_RECEIPT_INVALID_$dpi" }
+            $probe = Get-Content "evidence/dpi-$dpi-probe.json" -Raw | ConvertFrom-Json
+            Write-Host "REAL_OS_DPI_$dpi STATUS=$($probe.status) OBSERVED=$($probe.os_system_dpi_percent) GRAPHICS=$($probe.graphics_dpi_percent) EXE=$($probe.exe_sha256)"
+          }
+      - name: Upload GUI evidence even on HOLD
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-ui-revision-real-gui
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14

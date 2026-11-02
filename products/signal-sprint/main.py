@@ -127,54 +127,111 @@ def load_game(game, path=None):
     game.restore(json.loads(path.read_text(encoding="utf-8")))
 
 
+# UI-only revision. Game state, movement, save format and fixed source lineage are unchanged.
+UI_MESSAGE_JP = {
+    "Collect three cells, then reach EXIT.": "3つのエネルギーを集めて出口へ進もう。",
+    "Blocked. Choose another route.": "通れません。別の道を選んでください。",
+    "Circuit complete! Press R to restart.": "クリア！ Rで最初から遊べます。",
+    "Out of moves. Press R to retry.": "手数がなくなりました。Rで再挑戦。",
+    "EXIT locked: collect all three cells first.": "出口はまだ開きません。3つすべて回収しよう。",
+    "Find the shortest safe route.": "安全な最短ルートを探そう。",
+    "No move to undo.": "戻せる手がありません。",
+    "Move undone. Choose your next step.": "1手戻しました。次の手を選ぼう。",
+    "Saved round loaded. Press R to restart after game over.": "保存データを読み込みました。終了後はRで再挑戦。",
+    "Saved on this computer.": "このPCに保存しました。",
+}
+UI_STATUS_JP = {"PLAYING": "プレイ中", "WON": "クリア", "LOST": "失敗"}
+
+
+def ui_message(message, language):
+    if language != "JP":
+        return message
+    if message.startswith("Save failed:"):
+        return "保存できませんでした: " + message.split(":", 1)[1].strip()
+    if message.startswith("Load failed:"):
+        return "読み込めませんでした: " + message.split(":", 1)[1].strip()
+    return UI_MESSAGE_JP.get(message, message)
+
+
+def ui_window_size(work_width, work_height):
+    """Conservative *client* dimensions; reserve space for window chrome."""
+    if work_width < 840 or work_height < 636:
+        raise ValueError("Work area too small for the supported game UI")
+    return min(900, work_width - 80), min(620, work_height - 96)
+
+
 def launch():
     import tkinter as tk
     root = tk.Tk()
-    root.title("Signal Sprint | Offline 2D Puzzle")
-    root.geometry("1024x768")
-    root.minsize(820, 640)
+    root.title("Signal Sprint | EN")
     root.configure(bg="#101827")
+    # On Windows use the taskbar-excluding work area rather than full monitor.
+    # A reserved chrome margin is deliberate: Tk geometry is client dimensions.
+    work_left, work_top = 0, 0
+    work_width, work_height = root.winfo_screenwidth(), root.winfo_screenheight()
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                        ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+        rect = RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(
+                0x0030, 0, ctypes.byref(rect), 0):
+            work_left, work_top = rect.left, rect.top
+            work_width, work_height = rect.right - rect.left, rect.bottom - rect.top
+    width, height = ui_window_size(work_width, work_height)
+    root.geometry(f"{width}x{height}+{work_left+16}+{work_top+16}")
+    root.minsize(760, 540)
     game = Game()
     language = ["EN"]
     labels = {
         "EN": ("SIGNAL SPRINT", "Collect 3 energy cells, then reach EXIT.",
-               "Arrows / WASD / click adjacent tile", "Moves left", "Cells",
-               "Restart (R)", "Undo (U)", "Save (S)", "Load (L)", "日本語"),
+               "Arrows / WASD / click adjacent tile | J: Japanese",
+               "Moves left", "Cells", "Restart (R)", "Undo (U)",
+               "Save (S)", "Load (L)", "日本語 (J)"),
         "JP": ("SIGNAL SPRINT", "3つのエネルギーを集めて出口に到達しよう。",
-               "矢印 / WASD / 隣のマスをクリック", "残り手数", "回収",
-               "最初から (R)", "1手戻す (U)", "保存 (S)", "読込 (L)", "English"),
+               "矢印 / WASD / 隣のマスをクリック | J: English",
+               "残り手数", "回収", "最初から (R)", "1手戻す (U)",
+               "保存 (S)", "読込 (L)", "English (J)"),
     }
     heading = tk.Label(root, bg="#101827", fg="#e9f4ff",
-                       font=("Segoe UI", 26, "bold"))
-    heading.pack(pady=(16, 4))
+                       font=("Segoe UI", 22, "bold"))
+    heading.pack(pady=(8, 2))
     subtitle = tk.Label(root, bg="#101827", fg="#a8bed5",
-                        font=("Segoe UI", 12))
+                        font=("Segoe UI", 11))
     subtitle.pack()
     frame = tk.Frame(root, bg="#101827")
-    frame.pack(fill="both", expand=True, padx=18, pady=12)
-    canvas = tk.Canvas(frame, width=585, height=585, bg="#172338",
+    frame.pack(fill="both", expand=True, padx=12, pady=8)
+    canvas = tk.Canvas(frame, width=480, height=480, bg="#172338",
                        highlightthickness=0)
-    canvas.pack(side="left", padx=(0, 20))
+    canvas.pack(side="left", padx=(0, 12), anchor="n")
     panel = tk.Frame(frame, bg="#101827")
     panel.pack(side="left", fill="both", expand=True)
     info = tk.Label(panel, bg="#101827", fg="#e2f2ff",
-                    font=("Segoe UI", 17, "bold"), justify="left")
-    info.pack(anchor="w", pady=(18, 14))
+                    font=("Segoe UI", 14, "bold"), justify="left")
+    info.pack(anchor="w", pady=(6, 10))
     controls = tk.Label(panel, bg="#101827", fg="#9eb5cb",
-                        wraplength=280, justify="left")
-    controls.pack(anchor="w", pady=(0, 20))
-    message = tk.Label(panel, bg="#1d3047", fg="#fff", wraplength=270,
-                       justify="left", padx=12, pady=18)
-    message.pack(fill="x", pady=(0, 18))
+                        wraplength=270, justify="left")
+    controls.pack(anchor="w", pady=(0, 10))
+    message = tk.Label(panel, bg="#1d3047", fg="#fff", wraplength=260,
+                       justify="left", padx=8, pady=10)
+    message.pack(fill="x", pady=(0, 10))
+    button_frame = tk.Frame(panel, bg="#101827")
+    button_frame.pack(fill="x")
+    button_frame.grid_columnconfigure(0, weight=1)
+    button_frame.grid_columnconfigure(1, weight=1)
     buttons = []
 
     def draw():
         words = labels[language[0]]
+        root.title("Signal Sprint | " + language[0])
         heading.config(text=words[0])
         subtitle.config(text=words[1])
         controls.config(text=words[2])
         info.config(text=f"{words[3]}: {MAX_TURNS-game.turns}\n{words[4]}: {len(game.collected)}/3")
-        message.config(text=game.status + "\n\n" + game.message,
+        status = UI_STATUS_JP.get(game.status, game.status) if language[0] == "JP" else game.status
+        message.config(text=status + "\n\n" + ui_message(game.message, language[0]),
                        fg="#6de5ba" if game.status == "WON" else
                           "#ff9e9e" if game.status == "LOST" else "#fff")
         for button, title in zip(buttons, words[5:]):
@@ -183,7 +240,7 @@ def launch():
         for y in range(SIZE):
             for x in range(SIZE):
                 pos = (x, y)
-                left, top = 32 + x*65, 32 + y*65
+                left, top = 24 + x*52, 24 + y*52
                 color = "#273b53"
                 if pos in WALLS:
                     color = "#3b4353"
@@ -191,15 +248,15 @@ def launch():
                     color = "#20786f" if game.collected == CELLS else "#596174"
                 elif pos in CELLS - game.collected:
                     color = "#9e7029"
-                canvas.create_rectangle(left, top, left+62, top+62,
+                canvas.create_rectangle(left, top, left+49, top+49,
                                         fill=color, outline="")
                 if pos in CELLS - game.collected:
-                    canvas.create_oval(left+19, top+19, left+43, top+43,
+                    canvas.create_oval(left+14, top+14, left+35, top+35,
                                        fill="#ffdf7d", outline="")
                 if pos == EXIT:
-                    canvas.create_text(left+31, top+31, text="EXIT", fill="white")
+                    canvas.create_text(left+24, top+24, text="EXIT", fill="white")
                 if pos == game.position:
-                    canvas.create_oval(left+12, top+12, left+50, top+50,
+                    canvas.create_oval(left+10, top+10, left+39, top+39,
                                        fill="#64dcff", outline="#efffff", width=2)
 
     def move(dx, dy):
@@ -233,12 +290,14 @@ def launch():
         language[0] = "JP" if language[0] == "EN" else "EN"
         draw()
 
-    for action in (restart, undo, save, load, toggle):
-        button = tk.Button(panel, command=action, bg="#24577d", fg="white",
+    for index, action in enumerate((restart, undo, save, load, toggle)):
+        button = tk.Button(button_frame, command=action, bg="#24577d", fg="white",
                            activebackground="#367aa7", activeforeground="white",
-                           font=("Segoe UI", 12, "bold"), relief="flat",
-                           padx=12, pady=11)
-        button.pack(fill="x", pady=5)
+                           font=("Segoe UI", 10, "bold"), relief="flat",
+                           padx=6, pady=6)
+        row, col = divmod(index, 2)
+        button.grid(row=row, column=col, columnspan=2 if index == 4 else 1,
+                    sticky="ew", padx=3, pady=3)
         buttons.append(button)
 
     def key(event):
@@ -252,9 +311,11 @@ def launch():
             save()
         elif event.keysym.lower() == "l":
             load()
+        elif event.keysym.lower() == "j":
+            toggle()
 
     def click(event):
-        x, y = (event.x-32)//65, (event.y-32)//65
+        x, y = (event.x-24)//52, (event.y-24)//52
         if 0 <= x < SIZE and 0 <= y < SIZE:
             move(x-game.position[0], y-game.position[1])
 

@@ -1,0 +1,344 @@
+# Signal Sprint NEW UI revision: real Windows GUI evidence, never a Store/QA certification.
+param(
+  [Parameter(Mandatory=$true)][string]$ExePath,
+  [Parameter(Mandatory=$true)][string]$ReceiptPath,
+  [Parameter(Mandatory=$true)][string]$ScreenshotDir,
+  [ValidateSet(100,125,150)][int]$TargetDpiPercent = 100
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$receipt = [ordered]@{
+  schema_version = 1
+  product = 'Signal Sprint'
+  registration = 'GDK_GAME'
+  evidence_kind = 'NEW_REVISION_REAL_WINDOWS_GUI_CHECK_ONLY'
+  immutable_source_sha = 'c058cbf7fe38e02d929c67d047d717ff74bd522e'
+  revision_sha = $env:SIGNAL_SPRINT_REVISION_SHA
+  workflow_run_id = $env:GITHUB_RUN_ID
+  exe_sha256 = $null
+  exe_size_bytes = $null
+  monitor_bounds = $null
+  work_area_bounds = $null
+  window_bounds = $null
+  dpi_percent = $null
+  target_dpi_percent = $TargetDpiPercent
+  en_window_sha256 = $null
+  en_after_input_window_sha256 = $null
+  en_pre_exhaustion_window_sha256 = $null
+  en_exhausted_window_sha256 = $null
+  en_post_exhaustion_restart_window_sha256 = $null
+  en_replay_window_sha256 = $null
+  en_exhaustion_move_count = 0
+  en_exhaustion_input_sequence = $null
+  en_exhaustion_gui_check_only = 'HOLD_NOT_EXECUTED'
+  en_lost_text_semantics = 'HOLD_UNVERIFIED'
+  language_matrix_status = 'HOLD_NOT_EXECUTED'
+  jp_window_title_observed = $false
+  en_screenshot_sha256 = $null
+  jp_screenshot_sha256 = $null
+  after_input_screenshot_sha256 = $null
+  jp_window_sha256 = $null
+  after_input_window_sha256 = $null
+  restart_window_sha256 = $null
+  retry_restores_initial_window_pixels = $false
+  retry_gui_check_only = 'HOLD_NOT_TESTED'
+  exhaustion_input_sequence = $null
+  exhaustion_move_count = 0
+  pre_exhaustion_window_sha256 = $null
+  exhausted_window_sha256 = $null
+  post_exhaustion_restart_window_sha256 = $null
+  replay_window_sha256 = $null
+  exhaustion_pixel_change_observed = $false
+  exhaustion_reset_pixel_match = $false
+  replay_pixel_match = $false
+  lost_text_semantics = 'HOLD_UNVERIFIED'
+  jp_en_text_clipping = 'HOLD_UNMEASURED'
+  dpi_125 = 'HOLD_UNMEASURED'
+  dpi_150 = 'HOLD_UNMEASURED'
+  exhaustion_gui_check_only = 'HOLD_NOT_EXECUTED'
+  input_pixel_change_observed = $false
+  ui_automation_controls = 'HOLD_UNVERIFIED'
+  dpi_125_150 = 'HOLD_NOT_TESTED'
+  jp_gameplay_text_verified = $false
+  human_qa_pass = $false
+  sale_ready = $false
+  cas_return_pass = $false
+  gdk_sdk_executed = $false
+  msixvc2_built = $false
+  store_submitted = $false
+  status = 'GUI_CHECK_ONLY_HOLD'
+  reason = 'NOT_EXECUTED'
+}
+$proc = $null
+function Assert([bool]$condition, [string]$reason) {
+  if (-not $condition) { throw $reason }
+}
+function Capture-Monitor([string]$name, $screen) {
+  $bounds = $screen.Bounds
+  $bmp = [System.Drawing.Bitmap]::new([int]$bounds.Width, [int]$bounds.Height)
+  try {
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+      $graphics.CopyFromScreen([int]$bounds.Left, [int]$bounds.Top, 0, 0,
+                               ([System.Drawing.Size]::new([int]$bounds.Width, [int]$bounds.Height)))
+    } finally { $graphics.Dispose() }
+    $path = Join-Path $ScreenshotDir $name
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+  } finally { $bmp.Dispose() }
+}
+function Capture-Window([string]$name, $rect) {
+  # Crop to the measured visible game window, excluding taskbar/clock.
+  $left = [int][math]::Floor($rect.Left)
+  $top = [int][math]::Floor($rect.Top)
+  $width = [int][math]::Ceiling($rect.Width)
+  $height = [int][math]::Ceiling($rect.Height)
+  Assert ($width -gt 700 -and $height -gt 500) 'RETRY_WINDOW_BOUNDS_INVALID'
+  $bmp = [System.Drawing.Bitmap]::new($width, $height)
+  try {
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+      $graphics.CopyFromScreen($left, $top, 0, 0,
+                               ([System.Drawing.Size]::new($width, $height)))
+    } finally { $graphics.Dispose() }
+    $path = Join-Path $ScreenshotDir $name
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+  } finally { $bmp.Dispose() }
+}
+function Press-Key([string]$key, [int]$pidValue) {
+  [Microsoft.VisualBasic.Interaction]::AppActivate($pidValue) | Out-Null
+  Start-Sleep -Milliseconds 200
+  [System.Windows.Forms.SendKeys]::SendWait($key)
+  Start-Sleep -Milliseconds 400
+}
+try {
+  Assert ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) 'NOT_WINDOWS'
+  Assert ([bool]($env:SIGNAL_SPRINT_REVISION_SHA -match '^[0-9a-f]{40}$')) 'REVISION_SHA_NOT_BOUND'
+  Assert (Test-Path -LiteralPath $ExePath -PathType Leaf) 'REVISION_EXE_MISSING'
+  $receipt.exe_size_bytes = (Get-Item -LiteralPath $ExePath).Length
+  $receipt.exe_sha256 = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  Assert ($receipt.exe_size_bytes -gt 100000) 'REVISION_EXE_TOO_SMALL'
+  $bytes = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $ExePath).Path)
+  try {
+    Assert ($bytes.ReadByte() -eq 77 -and $bytes.ReadByte() -eq 90) 'REVISION_EXE_NOT_PE'
+  } finally { $bytes.Dispose() }
+  Add-Type -AssemblyName UIAutomationClient
+  Add-Type -AssemblyName UIAutomationTypes
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  Add-Type -AssemblyName Microsoft.VisualBasic
+  New-Item -ItemType Directory -Force -Path $ScreenshotDir | Out-Null
+  $exe = (Resolve-Path -LiteralPath $ExePath).Path
+  $proc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -PassThru
+  $window = $null
+  $guiProcess = $null
+  for ($attempt = 0; $attempt -lt 45; $attempt++) {
+    Start-Sleep -Milliseconds 500
+    $proc.Refresh()
+    Assert (-not $proc.HasExited) 'REVISION_EXE_EXITED_BEFORE_GUI'
+    $candidates = @($proc)
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($proc.Id)" -ErrorAction SilentlyContinue)
+    foreach ($child in $children) {
+      $candidate = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+      if ($null -ne $candidate) { $candidates += $candidate }
+    }
+    foreach ($candidate in $candidates) {
+      $candidate.Refresh()
+      if ($candidate.HasExited -or $candidate.MainWindowHandle -eq [IntPtr]::Zero) { continue }
+      $element = [System.Windows.Automation.AutomationElement]::FromHandle($candidate.MainWindowHandle)
+      if ($null -ne $element -and $element.Current.Name -eq 'Signal Sprint | EN') {
+        $window = $element
+        $guiProcess = $candidate
+        break
+      }
+    }
+    if ($null -ne $window) { break }
+  }
+  Assert ($null -ne $window) 'REAL_GUI_WINDOW_NOT_FOUND'
+  $screen = [System.Windows.Forms.Screen]::FromHandle($guiProcess.MainWindowHandle)
+  $monitor = $screen.Bounds
+  $work = $screen.WorkingArea
+  $win = $window.Current.BoundingRectangle
+  $receipt.monitor_bounds = @([int]$monitor.Left,[int]$monitor.Top,[int]$monitor.Right,[int]$monitor.Bottom)
+  $receipt.work_area_bounds = @([int]$work.Left,[int]$work.Top,[int]$work.Right,[int]$work.Bottom)
+  $receipt.window_bounds = @([int]$win.Left,[int]$win.Top,[int]$win.Right,[int]$win.Bottom)
+  $g = [System.Drawing.Graphics]::FromHwnd($guiProcess.MainWindowHandle)
+  try { $receipt.dpi_percent = [int][math]::Round($g.DpiX / 96.0 * 100) }
+  finally { $g.Dispose() }
+  Assert ($monitor.Width -eq 1024 -and $monitor.Height -eq 768) 'NOT_1024x768_REAL_MONITOR'
+  Assert ($receipt.dpi_percent -eq $TargetDpiPercent) 'REAL_GUI_DPI_NOT_REQUESTED_TARGET_HOLD'
+  Assert ($win.Width -gt 700 -and $win.Height -gt 500) 'WINDOW_UNEXPECTEDLY_SMALL'
+  Assert ($win.Left -ge $work.Left -and $win.Top -ge $work.Top -and
+          $win.Right -le $work.Right -and $win.Bottom -le $work.Bottom) 'WINDOW_OUTSIDE_WORK_AREA'
+  $receipt.en_screenshot_sha256 = Capture-Monitor 'signal-sprint-en.png' $screen
+  try {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button)
+    $controls = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    if ($controls.Count -gt 0) {
+      $receipt.ui_automation_controls = 'OBSERVED_NOT_CONSUMER_CERTIFIED'
+      $receipt.control_count = $controls.Count
+    }
+  } catch { $receipt.ui_automation_controls = 'HOLD_UNAVAILABLE' }
+  Press-Key 'j' $guiProcess.Id
+  Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'JAPANESE_TOGGLE_NOT_OBSERVED'
+  $receipt.jp_window_title_observed = $true
+  $receipt.jp_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp.png' $screen
+  Assert ($receipt.en_screenshot_sha256 -ne $receipt.jp_screenshot_sha256) 'JAPANESE_SCREEN_NO_PIXEL_CHANGE'
+  $receipt.jp_window_sha256 = Capture-Window 'signal-sprint-jp-window-initial.png' $win
+  Press-Key '{RIGHT}' $guiProcess.Id
+  $receipt.after_input_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp-after-right.png' $screen
+  $receipt.input_pixel_change_observed = $receipt.jp_screenshot_sha256 -ne $receipt.after_input_screenshot_sha256
+  Assert ($receipt.input_pixel_change_observed) 'FIRST_INPUT_NO_PIXEL_CHANGE'
+  $receipt.after_input_window_sha256 = Capture-Window 'signal-sprint-jp-window-after-right.png' $win
+  Assert ($receipt.after_input_window_sha256 -ne $receipt.jp_window_sha256) 'RETRY_PRECONDITION_MOVE_NOT_VISIBLE'
+  Press-Key 'r' $guiProcess.Id
+  Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'RETRY_CHANGED_LANGUAGE'
+  $retryWin = $window.Current.BoundingRectangle
+  Assert ([int]$retryWin.Left -eq [int]$win.Left -and
+          [int]$retryWin.Top -eq [int]$win.Top -and
+          [int]$retryWin.Width -eq [int]$win.Width -and
+          [int]$retryWin.Height -eq [int]$win.Height) 'RETRY_WINDOW_GEOMETRY_CHANGED'
+  $receipt.restart_window_sha256 = Capture-Window 'signal-sprint-jp-window-after-restart.png' $retryWin
+  $receipt.retry_restores_initial_window_pixels =
+    ($receipt.restart_window_sha256 -eq $receipt.jp_window_sha256)
+  Assert ($receipt.retry_restores_initial_window_pixels) 'RETRY_DID_NOT_RESTORE_INITIAL_GUI_PIXELS'
+  $receipt.retry_gui_check_only = 'REAL_R_KEY_RESET_PIXEL_MATCH_CHECK_ONLY'
+  # This is the SAME real Windows EXE and the SAME process. Start from the
+  # proven reset screen; use 30 legal corridor moves (RIGHT, LEFT, repeated).
+  # The immutable Game.move() source determines the expected LOST state.
+  $sequence = @()
+  for ($turn = 1; $turn -le 30; $turn++) {
+    $key = if ($turn % 2 -eq 1) { '{RIGHT}' } else { '{LEFT}' }
+    Press-Key $key $guiProcess.Id
+    $sequence += $(if ($turn % 2 -eq 1) { 'RIGHT' } else { 'LEFT' })
+    $guiProcess.Refresh()
+    Assert (-not $guiProcess.HasExited) 'EXHAUSTION_GAME_PROCESS_EXITED'
+    $current = $window.Current.BoundingRectangle
+    Assert ($current.Left -ge $work.Left -and $current.Top -ge $work.Top -and
+            $current.Right -le $work.Right -and $current.Bottom -le $work.Bottom) 'EXHAUSTION_WINDOW_OUTSIDE_WORK_AREA'
+    Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'EXHAUSTION_LANGUAGE_CHANGED'
+    if ($turn -eq 29) {
+      $receipt.pre_exhaustion_window_sha256 = Capture-Window 'signal-sprint-jp-turn-29.png' $current
+    }
+  }
+  $receipt.exhaustion_input_sequence = $sequence
+  $receipt.exhaustion_move_count = $sequence.Count
+  Assert ($receipt.exhaustion_move_count -eq 30) 'EXHAUSTION_INPUT_COUNT_WRONG'
+  $exhaustedRect = $window.Current.BoundingRectangle
+  $receipt.exhausted_window_sha256 = Capture-Window 'signal-sprint-jp-turn-30-expected-lost.png' $exhaustedRect
+  Assert ($receipt.exhausted_window_sha256 -ne $receipt.pre_exhaustion_window_sha256) 'EXHAUSTION_LAST_MOVE_NO_PIXEL_CHANGE'
+  $receipt.exhaustion_pixel_change_observed = $true
+  # Tk widgets may not expose their text through UIAutomation. A changed
+  # screenshot is NOT proof that the visible message actually says LOST.
+  try {
+    $allText = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition)
+    $names = @()
+    foreach ($element in $allText) {
+      try { if ($element.Current.Name) { $names += [string]$element.Current.Name } } catch {}
+    }
+    if (($names -join ' ') -match '\u5931\u6557' -and ($names -join ' ') -match '\u624b\u6570\u304c\u306a\u304f\u306a\u308a\u307e\u3057\u305f') {
+      $receipt.lost_text_semantics = 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED'
+    } else {
+      $receipt.lost_text_semantics = 'HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED'
+    }
+  } catch { $receipt.lost_text_semantics = 'HOLD_UIAUTOMATION_UNAVAILABLE' }
+  $receipt.exhaustion_gui_check_only = 'REAL_30_KEYS_AND_CHANGED_LAST_FRAME_CHECK_ONLY'
+  Press-Key 'r' $guiProcess.Id
+  $resetRect = $window.Current.BoundingRectangle
+  Assert ($resetRect.Left -ge $work.Left -and $resetRect.Top -ge $work.Top -and
+          $resetRect.Right -le $work.Right -and $resetRect.Bottom -le $work.Bottom) 'EXHAUSTION_RESET_OUTSIDE_WORK_AREA'
+  $receipt.post_exhaustion_restart_window_sha256 = Capture-Window 'signal-sprint-jp-after-lost-restart.png' $resetRect
+  $receipt.exhaustion_reset_pixel_match = ($receipt.post_exhaustion_restart_window_sha256 -eq $receipt.jp_window_sha256)
+  Assert ($receipt.exhaustion_reset_pixel_match) 'EXHAUSTION_R_DID_NOT_RESTORE_INITIAL_PIXELS'
+  Press-Key '{RIGHT}' $guiProcess.Id
+  $replayRect = $window.Current.BoundingRectangle
+  $receipt.replay_window_sha256 = Capture-Window 'signal-sprint-jp-after-lost-replay-right.png' $replayRect
+  $receipt.replay_pixel_match = ($receipt.replay_window_sha256 -eq $receipt.after_input_window_sha256)
+  Assert ($receipt.replay_pixel_match) 'EXHAUSTION_REPLAY_FIRST_MOVE_MISMATCH'
+  # Independent EN 30-turn exhaustion, restart and replay in the SAME process
+  # and same packaged EXE. The JP screenshots above are never relabeled EN.
+  Press-Key 'j' $guiProcess.Id
+  Assert ($window.Current.Name -eq 'Signal Sprint | EN') 'ENGLISH_TOGGLE_NOT_OBSERVED'
+  Press-Key 'r' $guiProcess.Id
+  $enRect = $window.Current.BoundingRectangle
+  Assert ($enRect.Left -ge $work.Left -and $enRect.Top -ge $work.Top -and
+          $enRect.Right -le $work.Right -and $enRect.Bottom -le $work.Bottom) 'EN_INITIAL_OUTSIDE_WORK_AREA'
+  $receipt.en_window_sha256 = Capture-Window 'signal-sprint-en-window-initial.png' $enRect
+  Press-Key '{RIGHT}' $guiProcess.Id
+  $receipt.en_after_input_window_sha256 = Capture-Window 'signal-sprint-en-window-after-right.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_after_input_window_sha256 -ne $receipt.en_window_sha256) 'EN_FIRST_MOVE_NO_CHANGE'
+  Press-Key 'r' $guiProcess.Id
+  $enReset = Capture-Window 'signal-sprint-en-window-before-exhaustion.png' $window.Current.BoundingRectangle
+  Assert ($enReset -eq $receipt.en_window_sha256) 'EN_PRE_EXHAUSTION_RESET_MISMATCH'
+  $enSequence = @()
+  for ($turn = 1; $turn -le 30; $turn++) {
+    $key = if ($turn % 2 -eq 1) { '{RIGHT}' } else { '{LEFT}' }
+    Press-Key $key $guiProcess.Id
+    $enSequence += $(if ($turn % 2 -eq 1) { 'RIGHT' } else { 'LEFT' })
+    $guiProcess.Refresh()
+    Assert (-not $guiProcess.HasExited) 'EN_EXHAUSTION_PROCESS_EXITED'
+    $current = $window.Current.BoundingRectangle
+    Assert ($current.Left -ge $work.Left -and $current.Top -ge $work.Top -and
+            $current.Right -le $work.Right -and $current.Bottom -le $work.Bottom) 'EN_EXHAUSTION_OUTSIDE_WORK_AREA'
+    Assert ($window.Current.Name -eq 'Signal Sprint | EN') 'EN_EXHAUSTION_LANGUAGE_CHANGED'
+    if ($turn -eq 29) {
+      $receipt.en_pre_exhaustion_window_sha256 = Capture-Window 'signal-sprint-en-turn-29.png' $current
+    }
+  }
+  $receipt.en_exhaustion_input_sequence = $enSequence
+  $receipt.en_exhaustion_move_count = $enSequence.Count
+  Assert ($receipt.en_exhaustion_move_count -eq 30) 'EN_MOVE_COUNT_WRONG'
+  $receipt.en_exhausted_window_sha256 = Capture-Window 'signal-sprint-en-turn-30-expected-lost.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_exhausted_window_sha256 -ne $receipt.en_pre_exhaustion_window_sha256) 'EN_LAST_MOVE_NO_PIXEL_CHANGE'
+  try {
+    $allText = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition)
+    $names = @()
+    foreach ($element in $allText) {
+      try { if ($element.Current.Name) { $names += [string]$element.Current.Name } } catch {}
+    }
+    if (($names -join ' ') -match 'LOST' -and ($names -join ' ') -match 'Out of moves') {
+      $receipt.en_lost_text_semantics = 'UIAUTOMATION_EN_LOST_TEXT_OBSERVED'
+    } else {
+      $receipt.en_lost_text_semantics = 'HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED'
+    }
+  } catch { $receipt.en_lost_text_semantics = 'HOLD_UIAUTOMATION_UNAVAILABLE' }
+  Press-Key 'r' $guiProcess.Id
+  $receipt.en_post_exhaustion_restart_window_sha256 = Capture-Window 'signal-sprint-en-after-lost-restart.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_post_exhaustion_restart_window_sha256 -eq $receipt.en_window_sha256) 'EN_R_DID_NOT_RESTORE_INITIAL_PIXELS'
+  Press-Key '{RIGHT}' $guiProcess.Id
+  $receipt.en_replay_window_sha256 = Capture-Window 'signal-sprint-en-after-lost-replay-right.png' $window.Current.BoundingRectangle
+  Assert ($receipt.en_replay_window_sha256 -eq $receipt.en_after_input_window_sha256) 'EN_REPLAY_FIRST_MOVE_MISMATCH'
+  $receipt.en_exhaustion_gui_check_only = 'REAL_EN_30_KEYS_RESTART_REPLAY_CHECK_ONLY'
+  $receipt.language_matrix_status = 'REAL_JP_AND_EN_SAME_EXE_CHECK_ONLY'
+  if ($TargetDpiPercent -eq 125) { $receipt.dpi_125 = 'REAL_OS_DPI_125_GUI_CHECK_ONLY' }
+  if ($TargetDpiPercent -eq 150) { $receipt.dpi_150 = 'REAL_OS_DPI_150_GUI_CHECK_ONLY' }
+  if ($TargetDpiPercent -ne 100) { $receipt.dpi_125_150 = 'HOLD_OTHER_DPI_NOT_TESTED' }
+  # Visible pixels and bounds do not prove that all glyphs are legible.
+  # UIAutomation may not expose Tk labels. Keep text clipping HOLD.
+  # DPI 125/150 and actual JP/EN glyph clipping need separate real runs.
+  # Never infer these PASS from 100% DPI or from synthetic geometry.
+  $receipt.status = 'GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY'
+  $receipt.reason = 'REAL_JP_EN_30_INPUTS_RESTART_REPLAY_CHECK_ONLY; UIA_TEXT_AND_GLYPH_CLIPPING_HOLD; OTHER_OS_DPI_NOT_INFERRED'
+} catch {
+  $receipt.status = 'GUI_CHECK_ONLY_HOLD'
+  $receipt.reason = [string]$_.Exception.Message
+} finally {
+  if ($null -ne $proc) {
+    try {
+      $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($proc.Id)" -ErrorAction SilentlyContinue)
+      foreach ($child in $children) { Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue }
+      Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    } catch { $receipt.cleanup_warning = $_.Exception.Message }
+  }
+  $parent = Split-Path -Parent $ReceiptPath
+  if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+  $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ReceiptPath -Encoding UTF8
+  Write-Host ($receipt | ConvertTo-Json -Compress -Depth 8)
+}
+if ($receipt.status -ne 'GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY') { exit 2 }
+exit 0
