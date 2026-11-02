@@ -112,6 +112,13 @@ class CurrentPhysicalQaTests(unittest.TestCase):
                                        "--output", str(out)]), 2)
         self.assertIn('"PHYSICAL_HOLD"', out.read_text())
 
+    def test_cross_session_restart_screenshot_reuse_holds(self):
+        a = self.session("ja", 100)
+        b = self.session("en", 100)
+        b["screenshots"]["restart"] = dict(a["screenshots"]["restart"])
+        result = current.aggregate([a, b], self.root)
+        self.assertIn("REUSED_OR_MISSING_SCREENSHOT_BETWEEN_PHASES_OR_SESSIONS", result["errors"])
+
     def test_synthetic_six_sessions_never_certify(self):
         sessions = [self.session(lang, dpi) for lang in ("ja", "en") for dpi in (100, 125, 150)]
         result = current.aggregate(sessions, self.root)
