@@ -24,6 +24,11 @@ $receipt = [ordered]@{
   en_screenshot_sha256 = $null
   jp_screenshot_sha256 = $null
   after_input_screenshot_sha256 = $null
+  jp_window_sha256 = $null
+  after_input_window_sha256 = $null
+  restart_window_sha256 = $null
+  retry_restores_initial_window_pixels = $false
+  retry_gui_check_only = 'HOLD_NOT_TESTED'
   input_pixel_change_observed = $false
   ui_automation_controls = 'HOLD_UNVERIFIED'
   dpi_125_150 = 'HOLD_NOT_TESTED'
@@ -49,6 +54,25 @@ function Capture-Monitor([string]$name, $screen) {
     try {
       $graphics.CopyFromScreen([int]$bounds.Left, [int]$bounds.Top, 0, 0,
                                ([System.Drawing.Size]::new([int]$bounds.Width, [int]$bounds.Height)))
+    } finally { $graphics.Dispose() }
+    $path = Join-Path $ScreenshotDir $name
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+  } finally { $bmp.Dispose() }
+}
+function Capture-Window([string]$name, $rect) {
+  # Crop to the measured visible game window, excluding taskbar/clock.
+  $left = [int][math]::Floor($rect.Left)
+  $top = [int][math]::Floor($rect.Top)
+  $width = [int][math]::Ceiling($rect.Width)
+  $height = [int][math]::Ceiling($rect.Height)
+  Assert ($width -gt 700 -and $height -gt 500) 'RETRY_WINDOW_BOUNDS_INVALID'
+  $bmp = [System.Drawing.Bitmap]::new($width, $height)
+  try {
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+      $graphics.CopyFromScreen($left, $top, 0, 0,
+                               ([System.Drawing.Size]::new($width, $height)))
     } finally { $graphics.Dispose() }
     $path = Join-Path $ScreenshotDir $name
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -136,12 +160,27 @@ try {
   $receipt.jp_window_title_observed = $true
   $receipt.jp_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp.png' $screen
   Assert ($receipt.en_screenshot_sha256 -ne $receipt.jp_screenshot_sha256) 'JAPANESE_SCREEN_NO_PIXEL_CHANGE'
+  $receipt.jp_window_sha256 = Capture-Window 'signal-sprint-jp-window-initial.png' $win
   Press-Key '{RIGHT}' $guiProcess.Id
   $receipt.after_input_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp-after-right.png' $screen
   $receipt.input_pixel_change_observed = $receipt.jp_screenshot_sha256 -ne $receipt.after_input_screenshot_sha256
   Assert ($receipt.input_pixel_change_observed) 'FIRST_INPUT_NO_PIXEL_CHANGE'
+  $receipt.after_input_window_sha256 = Capture-Window 'signal-sprint-jp-window-after-right.png' $win
+  Assert ($receipt.after_input_window_sha256 -ne $receipt.jp_window_sha256) 'RETRY_PRECONDITION_MOVE_NOT_VISIBLE'
+  Press-Key 'r' $guiProcess.Id
+  Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'RETRY_CHANGED_LANGUAGE'
+  $retryWin = $window.Current.BoundingRectangle
+  Assert ([int]$retryWin.Left -eq [int]$win.Left -and
+          [int]$retryWin.Top -eq [int]$win.Top -and
+          [int]$retryWin.Width -eq [int]$win.Width -and
+          [int]$retryWin.Height -eq [int]$win.Height) 'RETRY_WINDOW_GEOMETRY_CHANGED'
+  $receipt.restart_window_sha256 = Capture-Window 'signal-sprint-jp-window-after-restart.png' $retryWin
+  $receipt.retry_restores_initial_window_pixels =
+    ($receipt.restart_window_sha256 -eq $receipt.jp_window_sha256)
+  Assert ($receipt.retry_restores_initial_window_pixels) 'RETRY_DID_NOT_RESTORE_INITIAL_GUI_PIXELS'
+  $receipt.retry_gui_check_only = 'REAL_R_KEY_RESET_PIXEL_MATCH_CHECK_ONLY'
   $receipt.status = 'GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY'
-  $receipt.reason = 'REAL_WINDOW_AND_IMAGES_OBSERVED; JP_GAMEPLAY_TEXT_AND_DPI_125_150_NOT_CERTIFIED'
+  $receipt.reason = 'REAL_WINDOW_JP_INPUT_AND_R_RETRY_PIXELS_OBSERVED; LOST_STATE_RETRY_AND_DPI_125_150_NOT_CERTIFIED'
 } catch {
   $receipt.status = 'GUI_CHECK_ONLY_HOLD'
   $receipt.reason = [string]$_.Exception.Message
