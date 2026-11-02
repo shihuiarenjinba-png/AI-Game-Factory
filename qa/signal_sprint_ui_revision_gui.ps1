@@ -29,6 +29,20 @@ $receipt = [ordered]@{
   restart_window_sha256 = $null
   retry_restores_initial_window_pixels = $false
   retry_gui_check_only = 'HOLD_NOT_TESTED'
+  exhaustion_input_sequence = $null
+  exhaustion_move_count = 0
+  pre_exhaustion_window_sha256 = $null
+  exhausted_window_sha256 = $null
+  post_exhaustion_restart_window_sha256 = $null
+  replay_window_sha256 = $null
+  exhaustion_pixel_change_observed = $false
+  exhaustion_reset_pixel_match = $false
+  replay_pixel_match = $false
+  lost_text_semantics = 'HOLD_UNVERIFIED'
+  jp_en_text_clipping = 'HOLD_UNMEASURED'
+  dpi_125 = 'HOLD_UNMEASURED'
+  dpi_150 = 'HOLD_UNMEASURED'
+  exhaustion_gui_check_only = 'HOLD_NOT_EXECUTED'
   input_pixel_change_observed = $false
   ui_automation_controls = 'HOLD_UNVERIFIED'
   dpi_125_150 = 'HOLD_NOT_TESTED'
@@ -179,8 +193,63 @@ try {
     ($receipt.restart_window_sha256 -eq $receipt.jp_window_sha256)
   Assert ($receipt.retry_restores_initial_window_pixels) 'RETRY_DID_NOT_RESTORE_INITIAL_GUI_PIXELS'
   $receipt.retry_gui_check_only = 'REAL_R_KEY_RESET_PIXEL_MATCH_CHECK_ONLY'
+  # This is the SAME real Windows EXE and the SAME process. Start from the
+  # proven reset screen; use 30 legal corridor moves (RIGHT, LEFT, repeated).
+  # The immutable Game.move() source determines the expected LOST state.
+  $sequence = @()
+  for ($turn = 1; $turn -le 30; $turn++) {
+    $key = if ($turn % 2 -eq 1) { '{RIGHT}' } else { '{LEFT}' }
+    Press-Key $key $guiProcess.Id
+    $sequence += $(if ($turn % 2 -eq 1) { 'RIGHT' } else { 'LEFT' })
+    $guiProcess.Refresh()
+    Assert (-not $guiProcess.HasExited) 'EXHAUSTION_GAME_PROCESS_EXITED'
+    $current = $window.Current.BoundingRectangle
+    Assert ($current.Left -ge $work.Left -and $current.Top -ge $work.Top -and
+            $current.Right -le $work.Right -and $current.Bottom -le $work.Bottom) 'EXHAUSTION_WINDOW_OUTSIDE_WORK_AREA'
+    Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'EXHAUSTION_LANGUAGE_CHANGED'
+    if ($turn -eq 29) {
+      $receipt.pre_exhaustion_window_sha256 = Capture-Window 'signal-sprint-jp-turn-29.png' $current
+    }
+  }
+  $receipt.exhaustion_input_sequence = $sequence
+  $receipt.exhaustion_move_count = $sequence.Count
+  Assert ($receipt.exhaustion_move_count -eq 30) 'EXHAUSTION_INPUT_COUNT_WRONG'
+  $exhaustedRect = $window.Current.BoundingRectangle
+  $receipt.exhausted_window_sha256 = Capture-Window 'signal-sprint-jp-turn-30-expected-lost.png' $exhaustedRect
+  Assert ($receipt.exhausted_window_sha256 -ne $receipt.pre_exhaustion_window_sha256) 'EXHAUSTION_LAST_MOVE_NO_PIXEL_CHANGE'
+  $receipt.exhaustion_pixel_change_observed = $true
+  # Tk widgets may not expose their text through UIAutomation. A changed
+  # screenshot is NOT proof that the visible message actually says LOST.
+  try {
+    $allText = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition)
+    $names = @()
+    foreach ($element in $allText) {
+      try { if ($element.Current.Name) { $names += [string]$element.Current.Name } } catch {}
+    }
+    if (($names -join ' ') -match '失敗' -and ($names -join ' ') -match '手数がなくなりました') {
+      $receipt.lost_text_semantics = 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED'
+    } else {
+      $receipt.lost_text_semantics = 'HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED'
+    }
+  } catch { $receipt.lost_text_semantics = 'HOLD_UIAUTOMATION_UNAVAILABLE' }
+  $receipt.exhaustion_gui_check_only = 'REAL_30_KEYS_AND_CHANGED_LAST_FRAME_CHECK_ONLY'
+  Press-Key 'r' $guiProcess.Id
+  $resetRect = $window.Current.BoundingRectangle
+  Assert ($resetRect.Left -ge $work.Left -and $resetRect.Top -ge $work.Top -and
+          $resetRect.Right -le $work.Right -and $resetRect.Bottom -le $work.Bottom) 'EXHAUSTION_RESET_OUTSIDE_WORK_AREA'
+  $receipt.post_exhaustion_restart_window_sha256 = Capture-Window 'signal-sprint-jp-after-lost-restart.png' $resetRect
+  $receipt.exhaustion_reset_pixel_match = ($receipt.post_exhaustion_restart_window_sha256 -eq $receipt.jp_window_sha256)
+  Assert ($receipt.exhaustion_reset_pixel_match) 'EXHAUSTION_R_DID_NOT_RESTORE_INITIAL_PIXELS'
+  Press-Key '{RIGHT}' $guiProcess.Id
+  $replayRect = $window.Current.BoundingRectangle
+  $receipt.replay_window_sha256 = Capture-Window 'signal-sprint-jp-after-lost-replay-right.png' $replayRect
+  $receipt.replay_pixel_match = ($receipt.replay_window_sha256 -eq $receipt.after_input_window_sha256)
+  Assert ($receipt.replay_pixel_match) 'EXHAUSTION_REPLAY_FIRST_MOVE_MISMATCH'
+  # DPI 125/150 and actual JP/EN glyph clipping need separate real runs.
+  # Never infer these PASS from 100% DPI or from synthetic geometry.
   $receipt.status = 'GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY'
-  $receipt.reason = 'REAL_WINDOW_JP_INPUT_AND_R_RETRY_PIXELS_OBSERVED; LOST_STATE_RETRY_AND_DPI_125_150_NOT_CERTIFIED'
+  $receipt.reason = 'REAL_30_INPUTS_RESTART_REPLAY_SCREENSHOTS_CHECK_ONLY; LOST_TEXT_AND_DPI_125_150_AND_GLYPH_CLIPPING_HOLD'
 } catch {
   $receipt.status = 'GUI_CHECK_ONLY_HOLD'
   $receipt.reason = [string]$_.Exception.Message
