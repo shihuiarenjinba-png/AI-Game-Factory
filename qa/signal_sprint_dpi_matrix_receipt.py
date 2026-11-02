@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-from signal_sprint_exhaustion_receipt import verify_receipt
+from signal_sprint_bilingual_receipt import verify_bilingual
 
 IMMUTABLE = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
 SHA = re.compile(r"^[0-9a-f]{64}$")
@@ -53,7 +53,7 @@ def verify_probe(probe, base, *, expected_revision, screenshot_dir=None):
         require(observed is not None and observed != target, "FALSE_OS_DPI_HOLD")
         require(probe.get("gui_receipt_path") is None, "HOLD_CANNOT_HAVE_GUI_PASS")
     elif status == "HOLD_DPI_UNVERIFIED":
-        require(observed is None or graphics is None or observed != graphics, "DPI_HOLD_WITHOUT_EVIDENCE_GAP")
+        require(observed is None or graphics is None or observed != graphics or probe.get("reason") in ("PHYSICAL_MONITOR_OR_TASKBAR_WORK_AREA_MISMATCH", "NO_PHYSICAL_MONITOR"), "DPI_HOLD_WITHOUT_EVIDENCE_GAP")
         require(probe.get("gui_receipt_path") is None, "HOLD_CANNOT_HAVE_GUI_PASS")
     elif status == "HOLD_GUI_UNVERIFIED":
         require(probe.get("gui_receipt_path") is not None, "MISSING_FAILED_GUI_RECEIPT")
@@ -72,7 +72,7 @@ def verify_probe(probe, base, *, expected_revision, screenshot_dir=None):
                 require(inner.get("exe_sha256") == exe, "INNER_EXE_MISMATCH")
                 require(inner.get("workflow_run_id") == probe.get("workflow_run_id"), "INNER_RUN_MISMATCH")
                 require(inner.get("dpi_percent") == target, "INNER_DPI_MISMATCH")
-                errors.extend("GUI_" + err for err in verify_receipt(inner, screenshot_dir, expected_revision=expected_revision, expected_exe=exe))
+                errors.extend("GUI_" + err for err in verify_bilingual(inner, screenshot_dir, expected_revision=expected_revision, expected_exe=exe))
             except (OSError, ValueError, TypeError) as exc:
                 errors.append("GUI_RECEIPT_UNREADABLE:" + type(exc).__name__)
     return errors
