@@ -4,6 +4,7 @@ on:
     branches:
       - codex/game-signal-sprint-ui-revision-20261102
       - codex/game-signal-sprint-physical-qa-bundle-20261103
+      - codex/signal-sprint-current-artifact-physical-qa-20261103
   pull_request:
     branches:
       - codex/game-signal-sprint-undo-20261027
