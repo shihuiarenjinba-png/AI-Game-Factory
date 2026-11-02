@@ -113,7 +113,7 @@ def validate_archive_structure(archive: Path, revision: str, run_id: str) -> tup
                 data = z.read(item["path"])
                 if digest(data) != item.get("sha256") or len(data) != item.get("size_bytes"):
                     errors.append("SCREENSHOT_BYTES_MISMATCH")
-                if not data.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+                if not data.startswith(b"\x89PNG\r\n\x1a\n"):
                     errors.append("SCREENSHOT_NOT_PNG")
             if (len(exe_bytes) < 100000 or len(exe_bytes) > MAX_EXE or
                     not exe_bytes.startswith(b"MZ")):
