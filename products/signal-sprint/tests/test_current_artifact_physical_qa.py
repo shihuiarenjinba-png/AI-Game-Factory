@@ -24,7 +24,7 @@ class CurrentPhysicalQaTests(unittest.TestCase):
         shots = {}
         for i, phase in enumerate(current.PHASES):
             f = self.root / f"{lang}-{dpi}-{phase}.png"
-            Image.new("RGB", (1024, 768), (i * 45, dpi // 2, 100)).save(f)
+            Image.new("RGB", (1024, 768), (i * 45 + (10 if lang == "en" else 0), dpi // 2, 100)).save(f)
             shots[phase] = {"path": f.name, "sha256": base.digest(f)}
         return {**base.lineage(), "gui_artifact_id": current.GUI_ARTIFACT_ID,
                 "language": lang, "target_dpi_percent": dpi,
