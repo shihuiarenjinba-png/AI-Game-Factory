@@ -149,7 +149,7 @@ class DualLineageTests(unittest.TestCase):
 
     def test_outer_crc_corruption_rejected_even_with_rehashed_outer_digest(self):
         raw = bytearray(self.new.read_bytes())
-        i = raw.find(b"synthetic-EXE")
+        i = raw.find(b"second-revision")
         self.assertGreater(i, 0)
         raw[i] ^= 1
         self.new.write_bytes(raw)
