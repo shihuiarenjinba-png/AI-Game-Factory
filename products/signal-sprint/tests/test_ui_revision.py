@@ -43,6 +43,29 @@ class UIRevisionTests(unittest.TestCase):
         self.assertIn("読み込", game_module.ui_message("Load failed: ValueError", "JP"))
         self.assertEqual(set(game_module.UI_STATUS_JP), {"PLAYING", "WON", "LOST"})
 
+    def test_retry_after_exhausting_moves_restores_first_turn(self):
+        game = game_module.Game()
+        # Thirty legal moves in the first corridor, without altering game rules.
+        for i in range(game_module.MAX_TURNS):
+            self.assertTrue(game.move(1 if i % 2 == 0 else -1, 0))
+        self.assertEqual((game.status, game.turns), ("LOST", 30))
+        self.assertFalse(game.move(1, 0))
+        game.restart()
+        self.assertEqual(game.status, "PLAYING")
+        self.assertEqual(game.turns, 0)
+        self.assertEqual(game.position, game_module.START)
+        self.assertEqual(game.collected, set())
+        self.assertTrue(game.move(1, 0))
+
+    def test_dpi_125_150_not_equivalent_to_real_gui_approval(self):
+        # Geometry tests are synthetic; they cannot certify 125/150% Windows GUI.
+        for scale in (1.25, 1.50):
+            with self.subTest(scale=scale):
+                logical_width = int(1024 / scale)
+                logical_height = int(720 / scale)
+                with self.assertRaises(ValueError):
+                    game_module.ui_window_size(logical_width, logical_height)
+
     def test_gameplay_state_machine_not_changed(self):
         game = game_module.Game()
         self.assertEqual((game.position, game.turns, game.status), ((0, 0), 0, "PLAYING"))
