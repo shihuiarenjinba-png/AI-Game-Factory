@@ -113,5 +113,22 @@ class PhysicalQaArchiveTests(unittest.TestCase):
         self.assertIn("MANIFEST_LINEAGE_workflow_run_id", self.errors())
 
 
+    def test_pinned_and_new_run_bundles_reject_swapped_lineage(self):
+        # Structural-only synthetic ZIPs; real Artifact #13164091404 and
+        # #13167801977 contain DIFFERENT executed EXEs. Do not swap labels.
+        pinned = ("6f072dcf5369f7e56e235f7641d602e4fafc3417", "41489911241")
+        newer = ("f5bc1e0d495bdcd65bf25fa370d7e68ef415d323", "41498959569")
+        for actual, mislabeled_as in ((pinned, newer), (newer, pinned)):
+            with self.subTest(actual=actual, mislabeled_as=mislabeled_as):
+                self.manifest["build_head_sha"], self.manifest["workflow_run_id"] = actual
+                self.receipt["revision_sha"], self.receipt["workflow_run_id"] = actual
+                self.write()
+                self.assertEqual(validate_archive_structure(self.path, *actual)[0], [])
+                errors = validate_archive_structure(self.path, *mislabeled_as)[0]
+                self.assertIn("MANIFEST_LINEAGE_build_head_sha", errors)
+                self.assertIn("MANIFEST_LINEAGE_workflow_run_id", errors)
+                self.assertIn("GUI_RECEIPT_BINDING_revision_sha", errors)
+                self.assertIn("GUI_RECEIPT_BINDING_workflow_run_id", errors)
+
 if __name__ == "__main__":
     unittest.main()
