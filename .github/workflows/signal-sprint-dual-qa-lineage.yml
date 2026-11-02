@@ -1,0 +1,63 @@
+name: Signal Sprint dual real QA artifact lineage (check-only)
+on:
+  push:
+    branches:
+      - codex/signal-sprint-dual-qa-lineage-20261103
+  pull_request:
+    branches:
+      - codex/signal-sprint-current-artifact-physical-qa-20261103
+permissions:
+  contents: read
+  actions: read
+jobs:
+  lineage-check-only:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: shihuiarenjinba-png/AI-Game-Factory
+      EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify immutable original source and exact QA HEAD
+        shell: bash
+        run: |
+          git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
+          test "$(git rev-parse HEAD)" = "$EXACT_HEAD"
+      - name: Negative fixtures are synthetic only
+        shell: bash
+        run: |
+          python -m unittest discover -s products/signal-sprint/tests -p 'test_signal_sprint_dual_artifact_lineage.py' -v
+      - name: Download both REAL exact GitHub QA artifacts (no execution)
+        shell: bash
+        run: |
+          mkdir -p evidence
+          gh api /repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/13180405918/zip > evidence/pinned-13180405918.zip
+          gh api /repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/13185196046/zip > evidence/candidate-13185196046.zip
+      - name: Validate both nested ZIPs, EXE bytes, GUI receipt, source/request and HOLD gates
+        shell: bash
+        run: |
+          python qa/signal_sprint_dual_artifact_lineage.py \
+            --pinned evidence/pinned-13180405918.zip \
+            --candidate evidence/candidate-13185196046.zip \
+            --output evidence/dual-artifact-lineage.json
+          python -c 'import json; r=json.load(open("evidence/dual-artifact-lineage.json")); assert r["status"] == "DISTINCT_EXE_REVISIONS_VERIFIED" and r["physical_qa_status"] == "PHYSICAL_HOLD" and r["sale_ready"] is False and r["gdk_package_ready"] is False'
+      - name: Upload only comparison receipt, never EXEs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-dual-lineage-${{ matrix.os }}
+          path: evidence/dual-artifact-lineage.json
+          if-no-files-found: warn
+          retention-days: 14
