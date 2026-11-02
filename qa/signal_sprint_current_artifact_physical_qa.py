@@ -100,8 +100,15 @@ def extended_errors(session, root):
 def aggregate(sessions, root):
     errors = []
     base_sessions = []
+    seen_screenshot_sha = set()
     for s in sessions:
         errors.extend(extended_errors(s, root))
+        if isinstance(s, dict) and isinstance(s.get("screenshots"), dict):
+            for shot in s["screenshots"].values():
+                sha = shot.get("sha256") if isinstance(shot, dict) else None
+                if not sha or sha in seen_screenshot_sha:
+                    errors.append("REUSED_OR_MISSING_SCREENSHOT_BETWEEN_PHASES_OR_SESSIONS")
+                seen_screenshot_sha.add(sha)
         if isinstance(s, dict) and isinstance(s.get("screenshots"), dict):
             t = dict(s)
             t["screenshots"] = {k: s["screenshots"][k] for k in PHASES[:3] if k in s["screenshots"]}
