@@ -6,6 +6,8 @@ on:
   pull_request:
     branches:
       - codex/game-signal-sprint-undo-20261027
+env:
+  SIGNAL_SPRINT_REVISION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 permissions:
   contents: read
 jobs:
@@ -17,6 +19,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -24,6 +27,7 @@ jobs:
         shell: bash
         run: |
           git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
+          test "$(git rev-parse HEAD)" = "$SIGNAL_SPRINT_REVISION_SHA"
           python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
   windows-real-gui:
     runs-on: windows-latest
@@ -33,6 +37,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -41,6 +46,7 @@ jobs:
         run: |
           git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
           if ($LASTEXITCODE -ne 0) { throw 'IMMUTABLE_SOURCE_NOT_ANCESTOR' }
+          if ((git rev-parse HEAD).Trim() -cne $env:SIGNAL_SPRINT_REVISION_SHA) { throw 'REVISION_HEAD_DRIFT' }
           python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'UNIT_TESTS_FAILED' }
       - name: Build real new-revision Windows EXE (never reuse old Artifact)
