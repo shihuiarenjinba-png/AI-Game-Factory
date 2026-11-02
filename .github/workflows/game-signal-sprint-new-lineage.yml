@@ -12,6 +12,7 @@ on:
         type: string
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: signal-sprint-new-lineage-${{ github.run_id }}
   cancel-in-progress: false
@@ -94,3 +95,71 @@ jobs:
             ${{ env.NEW_LINEAGE_STAGE }}/lineage-receipt.json
           if-no-files-found: error
           retention-days: 30
+
+  verify-existing-artifact-check-only:
+    # Explicit PR-body marker triggers read-only validation of the EXISTING
+    # run/artifact. It must not create another build or authorize CAS.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 15 &&
+      github.event.pull_request.head.repo.full_name == 'shihuiarenjinba-png/AI-Game-Factory' &&
+      contains(github.event.pull_request.body, '[signal-sprint-evidence-check]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout pinned Provisioner evidence validator (not Factory source)
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: 97129ef972e3d166a35ea6e03a3c70707f5f42a4
+          path: provisioner
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download original outer ZIP and perform LIVE strict check-only
+        shell: bash
+        working-directory: provisioner
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from gdk_factory_lineage_adapter import check_live
+
+          run_id = 41361263698
+          artifact_id = 13105352227
+          url = ("https://api.github.com/repos/shihuiarenjinba-png/"
+                 f"AI-Game-Factory/actions/artifacts/{artifact_id}/zip")
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "signal-sprint-live-check-only",
+              "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          target = Path(os.environ["RUNNER_TEMP"]) / "signal-sprint-existing-outer-13105352227.zip"
+          with urlopen(Request(url, headers=headers, method="GET"), timeout=45) as response:
+              archive = response.read(100_000_001)
+          if not 0 < len(archive) <= 100_000_000:
+              raise SystemExit("ARTIFACT_EXACT_BYTES_HOLD: outer ZIP missing/oversized")
+          target.write_bytes(archive)
+          result = check_live(target, run_id, artifact_id, os.environ["GITHUB_TOKEN"])
+          print(json.dumps(result, sort_keys=True))
+          if result.get("status") != "FACTORY_NEW_LINEAGE_GITHUB_CHECK_ONLY":
+              raise SystemExit("LIVE_GITHUB_CHECK_ONLY_HOLD: " + str(result.get("reason")))
+          for key in ("ready_for_cas", "cas_return_pass", "approval_authenticity_verified",
+                      "package_version_approved", "gdk_assets_approved",
+                      "real_msixvc_built", "e2e_pass", "store_submitted"):
+              if result.get(key) is not False:
+                  raise SystemExit("DOWNSTREAM_GATE_FALSE_CLAIM: " + key)
+          if result.get("original_lineage_status") != "ARTIFACT_EXACT_BYTES_HOLD":
+              raise SystemExit("ORIGINAL_ARTIFACT_HOLD_ERASED")
+          print("LIVE_CHECK_ONLY_VERIFIED; CAS/SDK/MSIXVC2/E2E/Store remain HOLD")
+          PY
