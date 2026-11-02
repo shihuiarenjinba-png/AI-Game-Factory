@@ -315,6 +315,9 @@ try {
   Assert ($receipt.en_replay_window_sha256 -eq $receipt.en_after_input_window_sha256) 'EN_REPLAY_FIRST_MOVE_MISMATCH'
   $receipt.en_exhaustion_gui_check_only = 'REAL_EN_30_KEYS_RESTART_REPLAY_CHECK_ONLY'
   $receipt.language_matrix_status = 'REAL_JP_AND_EN_SAME_EXE_CHECK_ONLY'
+  if ($TargetDpiPercent -eq 125) { $receipt.dpi_125 = 'REAL_OS_DPI_125_GUI_CHECK_ONLY' }
+  if ($TargetDpiPercent -eq 150) { $receipt.dpi_150 = 'REAL_OS_DPI_150_GUI_CHECK_ONLY' }
+  if ($TargetDpiPercent -ne 100) { $receipt.dpi_125_150 = 'HOLD_OTHER_DPI_NOT_TESTED' }
   # Visible pixels and bounds do not prove that all glyphs are legible.
   # UIAutomation may not expose Tk labels. Keep text clipping HOLD.
   # DPI 125/150 and actual JP/EN glyph clipping need separate real runs.
