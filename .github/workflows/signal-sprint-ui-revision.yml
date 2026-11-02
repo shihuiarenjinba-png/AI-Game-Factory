@@ -62,6 +62,11 @@ jobs:
         run: |
           & .\qa\signal_sprint_ui_revision_gui.ps1 -ExePath .\dist\game\SignalSprint.exe -ReceiptPath .\evidence\ui-revision-receipt.json -ScreenshotDir .\evidence\screenshots
           if ($LASTEXITCODE -ne 0) { throw "REAL_GUI_CHECK_ONLY_HOLD: $LASTEXITCODE" }
+      - name: Verify same-EXE 30-move receipt and screenshot SHA bindings
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_exhaustion_receipt.py --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --revision $env:SIGNAL_SPRINT_REVISION_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'REAL_EXHAUSTION_RECEIPT_HOLD' }
       - name: Upload GUI evidence even on HOLD
         if: always()
         uses: actions/upload-artifact@v4
