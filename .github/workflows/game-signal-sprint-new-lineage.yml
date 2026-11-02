@@ -176,3 +176,76 @@ jobs:
               raise SystemExit("ORIGINAL_ARTIFACT_HOLD_ERASED")
           print("LIVE_CHECK_ONLY_VERIFIED; CAS/SDK/MSIXVC2/E2E/Store remain HOLD")
           PY
+
+  windows-existing-artifact-real-gui-check-only:
+    # Separate from build and evidence-only jobs; GUI may be unavailable in service session.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 15 &&
+      github.event.pull_request.head.repo.full_name == 'shihuiarenjinba-png/AI-Game-Factory' &&
+      github.event.pull_request.head.ref == 'codex/game-signal-sprint-new-lineage-20261102' &&
+      contains(github.event.pull_request.body, '[signal-sprint-gui-smoke]')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout immutable Provisioner QA implementation
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: 452e52a360a779fc7d0f94717cb3e471137f86f4
+          path: provisioner-qa
+          persist-credentials: false
+      - name: Download EXISTING Factory run artifact (never rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-new-lineage-41361263698
+          run-id: 41361263698
+          repository: shihuiarenjinba-png/AI-Game-Factory
+          github-token: ${{ github.token }}
+          path: existing-artifact
+      - name: Verify exact artifact ID and nested real EXE before launch
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+          $listing = Invoke-RestMethod -Uri 'https://api.github.com/repos/shihuiarenjinba-png/AI-Game-Factory/actions/runs/41361263698/artifacts' -Headers $headers
+          $match = @($listing.artifacts | Where-Object { $_.id -eq 13105352227 -and $_.name -eq 'signal-sprint-new-lineage-41361263698' })
+          if ($match.Count -ne 1 -or $match[0].expired -eq $true -or $match[0].digest -ne 'sha256:843496682662e871fc6e1b5df83ace2c6b01ef314cfc466b5072290890b70a8f') { throw 'REAL_GUI_HOLD: GitHub artifact identity/digest/expiry mismatch' }
+          $inner = Join-Path $PWD 'existing-artifact/new-lineage.zip'
+          $lineage = Get-Content -LiteralPath 'existing-artifact/lineage-receipt.json' -Raw | ConvertFrom-Json
+          if ($lineage.source_sha -ne 'c058cbf7fe38e02d929c67d047d717ff74bd522e' -or
+              $lineage.request_id -ne 'game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e-reissue-sprint-41361263698-41361263698' -or
+              $lineage.build_head_sha -ne 'a1af3448cd2edeae5bd54cbaca486a53fd991944' -or
+              $lineage.github_run_id -ne 41361263698 -or
+              $lineage.legacy_artifact_replaced -ne $false -or
+              $lineage.cas_status -ne 'NOT_EXECUTED') { throw 'REAL_GUI_HOLD: Factory receipt lineage mismatch' }
+          if ((Get-FileHash -LiteralPath $inner -Algorithm SHA256).Hash.ToLowerInvariant() -ne '46aff1ee7570459235c9e7ca7fb1faf6f494dc8100e62b6e132c6d07a6291b71') { throw 'REAL_GUI_HOLD: inner ZIP SHA mismatch' }
+          $target = Join-Path $env:RUNNER_TEMP 'signal-sprint-real-gui'
+          New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null
+          Expand-Archive -LiteralPath $inner -DestinationPath $target -ErrorAction Stop
+          $exe = Join-Path $target 'SignalSprint.exe'
+          if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'beb683b61b4fa4b2ec90fe1d413363c8a535bd4cb72b41b54b03a9685f516ee0' -or
+              (Get-Item -LiteralPath $exe).Length -ne 11344389) { throw 'REAL_GUI_HOLD: EXE bytes mismatch' }
+          "SIGNAL_SPRINT_EXE=$exe" >> $env:GITHUB_ENV
+      - name: Execute REAL GUI first move / loss / retry smoke (HOLD if no interactive session)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -NonInteractive -File provisioner-qa/qa/signal_sprint_windows_gui_smoke.ps1 -ExePath $env:SIGNAL_SPRINT_EXE -ReceiptPath "$env:RUNNER_TEMP/signal-sprint-gui-receipt.json" -ScreenshotPath "$env:RUNNER_TEMP/signal-sprint-gui.png"
+          if ($LASTEXITCODE -ne 0) { throw 'REAL_GUI_HOLD: inspect receipt, no human QA claim' }
+          python provisioner-qa/gdk_signal_sprint_gui_receipt.py --receipt "$env:RUNNER_TEMP/signal-sprint-gui-receipt.json"
+          if ($LASTEXITCODE -ne 0) { throw 'REAL_GUI_HOLD: independent receipt validation failed' }
+      - name: Publish check-only receipt and optional screenshot even on HOLD
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-real-gui-check-only-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/signal-sprint-gui-receipt.json
+            ${{ runner.temp }}/signal-sprint-gui.png
+          if-no-files-found: warn
+          retention-days: 14
