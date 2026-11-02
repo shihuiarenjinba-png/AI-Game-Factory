@@ -20,6 +20,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout exact public Provisioner-game PR53 for read-only contract audit
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: external-provisioner
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -31,6 +38,10 @@ jobs:
           git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
           test "$(git rev-parse HEAD)" = "$SIGNAL_SPRINT_REVISION_SHA"
           python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+      - name: Audit exact PR53 GDK staging contract read-only (not GDK READY)
+        shell: bash
+        run: |
+          python qa/signal_sprint_gdk_review_gate.py --provisioner-checkout external-provisioner --contract-only --output evidence/pr53-contract-only.json
   windows-real-gui:
     runs-on: windows-latest
     timeout-minutes: 35
@@ -40,6 +51,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout exact public Provisioner-game PR53 for read-only contract audit
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: external-provisioner
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -56,6 +74,11 @@ jobs:
           if ((git rev-parse HEAD).Trim() -cne $env:SIGNAL_SPRINT_REVISION_SHA) { throw 'REVISION_HEAD_DRIFT' }
           python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'UNIT_TESTS_FAILED' }
+      - name: Audit exact PR53 GDK staging contract read-only (not GDK READY)
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_gdk_review_gate.py --provisioner-checkout external-provisioner --contract-only --output evidence/pr53-contract-only.json
+          if ($LASTEXITCODE -ne 0) { throw 'PR53_SOURCE_CONTRACT_HOLD' }
       - name: Build real new-revision Windows EXE (never reuse old Artifact)
         shell: pwsh
         run: |
@@ -84,6 +107,13 @@ jobs:
         run: |
           python qa/signal_sprint_visibility_receipt.py --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --revision $env:SIGNAL_SPRINT_REVISION_SHA --run-id $env:GITHUB_RUN_ID --exe dist/game/SignalSprint.exe --output evidence/visibility-roi-receipt.json
           if ($LASTEXITCODE -ne 0) { throw 'REAL_GUI_VISIBILITY_ROI_HOLD' }
+      - name: Bind real UI review EXE and screenshot receipt to PR53 GDK staging contract (HOLD expected)
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_gdk_review_gate.py --provisioner-checkout external-provisioner --receipt evidence/ui-revision-receipt.json --screenshots evidence/screenshots --exe dist/game/SignalSprint.exe --revision $env:SIGNAL_SPRINT_REVISION_SHA --run-id $env:GITHUB_RUN_ID --output evidence/review-vs-gdk-lineage.json
+          if ($LASTEXITCODE -ne 0) { throw 'REVIEW_VS_GDK_LINEAGE_CONFLICT' }
+          $gate = Get-Content evidence/review-vs-gdk-lineage.json -Raw | ConvertFrom-Json
+          if ($gate.status -cne 'REVIEW_GUI_CHECK_ONLY_GDK_STAGING_HOLD' -or $gate.real_msixvc_built -or $gate.sale_ready) { throw 'GDK_PACKAGE_FALSE_READY' }
       - name: Probe actual Windows OS DPI 125 and 150 with the SAME EXE
         shell: powershell
         run: |
