@@ -1,0 +1,271 @@
+name: Signal Sprint immutable NEW build lineage (not CAS)
+# The PR-body one-shot is a manual launch path without touching main.
+# It does not authorize CAS or Store submission.
+on:
+  pull_request:
+    types: [edited]
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "Unique new lineage build ID (8-32 lowercase characters/hyphens)"
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: signal-sprint-new-lineage-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  windows-new-lineage:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.number == 15 &&
+       github.event.pull_request.head.repo.full_name == 'shihuiarenjinba-png/AI-Game-Factory' &&
+       github.event.pull_request.head.ref == 'codex/game-signal-sprint-new-lineage-20261102' &&
+       github.event.changes.body.from != null &&
+       contains(github.event.pull_request.body, '[signal-sprint-build-once]') &&
+       !contains(github.event.changes.body.from, '[signal-sprint-build-once]'))
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout control branch without credentials
+        uses: actions/checkout@v4
+        with:
+          path: control
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Checkout immutable GAME source by exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: c058cbf7fe38e02d929c67d047d717ff74bd522e
+          path: immutable-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test NEW lineage contract before build
+        shell: pwsh
+        run: |
+          Set-Location control
+          python -m unittest discover -s tests -p "test_gdk_new_lineage_factory.py" -v
+      - name: Verify immutable source and distinct control HEAD before building
+        shell: pwsh
+        env:
+          EXPECTED_CONTROL_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceHead = (& git -C immutable-source rev-parse HEAD).Trim()
+          $controlHead = (& git -C control rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceHead -ne 'c058cbf7fe38e02d929c67d047d717ff74bd522e') { throw 'NEW_LINEAGE_HOLD: immutable source checkout mismatch' }
+          if ($controlHead -ne $env:EXPECTED_CONTROL_HEAD -or $controlHead -eq $sourceHead) { throw 'NEW_LINEAGE_HOLD: control/build HEAD mismatch' }
+          $dirty = & git -C immutable-source status --porcelain=v1 --untracked-files=all
+          if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'NEW_LINEAGE_HOLD: source checkout dirty before build' }
+          if ((Resolve-Path control).Path -eq (Resolve-Path immutable-source).Path) { throw 'NEW_LINEAGE_HOLD: overlapping checkouts' }
+      - name: Build unsigned GAME EXE from immutable source only
+        shell: pwsh
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File immutable-source/scripts/build-windows.ps1
+      - name: Create independent new-lineage ZIP and fail-closed receipt
+        shell: pwsh
+        env:
+          NEW_BUILD_ID: ${{ github.event_name == 'pull_request' && format('sprint-{0}', github.run_id) || inputs.build_id }}
+          BUILD_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ACTION_RUN_ID: ${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP ("signal-sprint-new-lineage-" + $env:ACTION_RUN_ID)
+          if (Test-Path -LiteralPath $stage) { throw 'staging path already exists' }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          python control/tools/gdk_new_lineage_factory.py --source-dir immutable-source --control-dir control --staging-dir $stage --build-id $env:NEW_BUILD_ID --run-id $env:ACTION_RUN_ID --build-head $env:BUILD_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'NEW_LINEAGE_HOLD: receipt validation failed' }
+          $receipt = Get-Content -LiteralPath (Join-Path $stage 'lineage-receipt.json') -Raw | ConvertFrom-Json
+          if ($receipt.request_id -eq 'game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e' -or $receipt.source_sha -ne 'c058cbf7fe38e02d929c67d047d717ff74bd522e' -or $receipt.build_head_sha -ne $env:BUILD_HEAD -or $receipt.github_run_id -ne [long]$env:ACTION_RUN_ID) { throw 'NEW_LINEAGE_HOLD: lineage identity mismatch' }
+          if ($receipt.github_evidence_verified -ne $false -or $null -ne $receipt.github_artifact_id -or $receipt.legacy_artifact_recovered -ne $false) { throw 'NEW_LINEAGE_HOLD: unproven evidence claim' }
+          $actualZip = (Get-FileHash -LiteralPath (Join-Path $stage 'new-lineage.zip') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($receipt.artifact_sha256 -ne $actualZip) { throw 'NEW_LINEAGE_HOLD: uploaded inner ZIP digest mismatch' }
+          if ($receipt.cas_status -ne 'NOT_EXECUTED' -or $receipt.msixvc2_status -ne 'NOT_BUILT' -or $receipt.legacy_artifact_replaced -ne $false) { throw 'NEW_LINEAGE_HOLD: invalid phase' }
+          "NEW_LINEAGE_STAGE=$stage" >> $env:GITHUB_ENV
+      - name: Upload NEW lineage only (not old artifact or MSIXVC2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-new-lineage-${{ github.run_id }}
+          path: |
+            ${{ env.NEW_LINEAGE_STAGE }}/new-lineage.zip
+            ${{ env.NEW_LINEAGE_STAGE }}/lineage-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+  verify-existing-artifact-check-only:
+    # Explicit PR-body marker triggers read-only validation of the EXISTING
+    # run/artifact. It must not create another build or authorize CAS.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 15 &&
+      github.event.pull_request.head.repo.full_name == 'shihuiarenjinba-png/AI-Game-Factory' &&
+      contains(github.event.pull_request.body, '[signal-sprint-evidence-check]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout pinned Provisioner evidence validator (not Factory source)
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: bc1b7f50d34e3707699b6aa0ce6314f20499631f
+          path: provisioner
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download original outer ZIP and perform LIVE strict check-only
+        shell: bash
+        working-directory: provisioner
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+          from urllib.parse import urlsplit
+          from gdk_factory_lineage_adapter import check_live
+
+          class StripCrossHostAuthorization(HTTPRedirectHandler):
+              # GitHub's artifact endpoint redirects to a signed blob URL.
+              # Forwarding the GitHub Bearer token to that host causes HTTP 401
+              # and is unsafe. Preserve token only for api.github.com.
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+                  if redirected is not None and urlsplit(newurl).hostname != urlsplit(req.full_url).hostname:
+                      redirected.remove_header("Authorization")
+                  return redirected
+
+          run_id = 41361263698
+          artifact_id = 13105352227
+          url = ("https://api.github.com/repos/shihuiarenjinba-png/"
+                 f"AI-Game-Factory/actions/artifacts/{artifact_id}/zip")
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "signal-sprint-live-check-only",
+              "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          target = Path(os.environ["RUNNER_TEMP"]) / "signal-sprint-existing-outer-13105352227.zip"
+          with build_opener(StripCrossHostAuthorization()).open(
+              Request(url, headers=headers, method="GET"), timeout=45
+          ) as response:
+              archive = response.read(100_000_001)
+          if not 0 < len(archive) <= 100_000_000:
+              raise SystemExit("ARTIFACT_EXACT_BYTES_HOLD: outer ZIP missing/oversized")
+          target.write_bytes(archive)
+          result = check_live(target, run_id, artifact_id, os.environ["GITHUB_TOKEN"])
+          print(json.dumps(result, sort_keys=True))
+          if result.get("status") != "FACTORY_NEW_LINEAGE_GITHUB_CHECK_ONLY":
+              raise SystemExit("LIVE_GITHUB_CHECK_ONLY_HOLD: " + str(result.get("reason")))
+          for key in ("ready_for_cas", "cas_return_pass", "approval_authenticity_verified",
+                      "package_version_approved", "gdk_assets_approved",
+                      "real_msixvc_built", "e2e_pass", "store_submitted"):
+              if result.get(key) is not False:
+                  raise SystemExit("DOWNSTREAM_GATE_FALSE_CLAIM: " + key)
+          if result.get("original_lineage_status") != "ARTIFACT_EXACT_BYTES_HOLD":
+              raise SystemExit("ORIGINAL_ARTIFACT_HOLD_ERASED")
+          print("LIVE_CHECK_ONLY_VERIFIED; CAS/SDK/MSIXVC2/E2E/Store remain HOLD")
+          PY
+
+  windows-existing-artifact-real-gui-check-only:
+    # Separate from build and evidence-only jobs; GUI may be unavailable in service session.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 15 &&
+      github.event.pull_request.head.repo.full_name == 'shihuiarenjinba-png/AI-Game-Factory' &&
+      github.event.pull_request.head.ref == 'codex/game-signal-sprint-new-lineage-20261102' &&
+      github.event.changes.body.from != null &&
+      contains(github.event.pull_request.body, '[signal-sprint-gui-smoke]') &&
+      !contains(github.event.changes.body.from, '[signal-sprint-gui-smoke]')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout immutable Provisioner QA implementation
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: b53f89fc0b59871ba8f5cc7c62703bfdcc20d53a
+          path: provisioner-qa
+          persist-credentials: false
+      - name: Download EXISTING Factory run artifact (never rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-new-lineage-41361263698
+          run-id: 41361263698
+          repository: shihuiarenjinba-png/AI-Game-Factory
+          github-token: ${{ github.token }}
+          path: existing-artifact
+      - name: Verify exact artifact ID and nested real EXE before launch
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+          $listing = Invoke-RestMethod -Uri 'https://api.github.com/repos/shihuiarenjinba-png/AI-Game-Factory/actions/runs/41361263698/artifacts' -Headers $headers
+          $match = @($listing.artifacts | Where-Object { $_.id -eq 13105352227 -and $_.name -eq 'signal-sprint-new-lineage-41361263698' })
+          if ($match.Count -ne 1 -or $match[0].expired -eq $true -or $match[0].digest -ne 'sha256:843496682662e871fc6e1b5df83ace2c6b01ef314cfc466b5072290890b70a8f') { throw 'REAL_GUI_HOLD: GitHub artifact identity/digest/expiry mismatch' }
+          $inner = Join-Path $PWD 'existing-artifact/new-lineage.zip'
+          $lineage = Get-Content -LiteralPath 'existing-artifact/lineage-receipt.json' -Raw | ConvertFrom-Json
+          if ($lineage.source_sha -ne 'c058cbf7fe38e02d929c67d047d717ff74bd522e' -or
+              $lineage.request_id -ne 'game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e-reissue-sprint-41361263698-41361263698' -or
+              $lineage.build_head_sha -ne 'a1af3448cd2edeae5bd54cbaca486a53fd991944' -or
+              $lineage.github_run_id -ne 41361263698 -or
+              $lineage.legacy_artifact_replaced -ne $false -or
+              $lineage.cas_status -ne 'NOT_EXECUTED') { throw 'REAL_GUI_HOLD: Factory receipt lineage mismatch' }
+          if ((Get-FileHash -LiteralPath $inner -Algorithm SHA256).Hash.ToLowerInvariant() -ne '46aff1ee7570459235c9e7ca7fb1faf6f494dc8100e62b6e132c6d07a6291b71') { throw 'REAL_GUI_HOLD: inner ZIP SHA mismatch' }
+          $target = Join-Path $env:RUNNER_TEMP 'signal-sprint-real-gui'
+          New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null
+          Expand-Archive -LiteralPath $inner -DestinationPath $target -ErrorAction Stop
+          $exe = Join-Path $target 'SignalSprint.exe'
+          if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'beb683b61b4fa4b2ec90fe1d413363c8a535bd4cb72b41b54b03a9685f516ee0' -or
+              (Get-Item -LiteralPath $exe).Length -ne 11344389) { throw 'REAL_GUI_HOLD: EXE bytes mismatch' }
+          "SIGNAL_SPRINT_EXE=$exe" >> $env:GITHUB_ENV
+      - name: Execute REAL GUI first move / loss / retry smoke (HOLD if no interactive session)
+        id: gui_smoke
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -NonInteractive -File provisioner-qa/qa/signal_sprint_windows_gui_smoke.ps1 -ExePath $env:SIGNAL_SPRINT_EXE -ReceiptPath "$env:RUNNER_TEMP/signal-sprint-gui-receipt.json" -ScreenshotPath "$env:RUNNER_TEMP/signal-sprint-gui.png"
+          if ($LASTEXITCODE -ne 0) { throw 'REAL_GUI_HOLD: inspect receipt, no human QA claim' }
+          python provisioner-qa/gdk_signal_sprint_gui_receipt.py --receipt "$env:RUNNER_TEMP/signal-sprint-gui-receipt.json"
+          if ($LASTEXITCODE -ne 0) { throw 'REAL_GUI_HOLD: independent receipt validation failed' }
+      - name: Independently review real screenshot, taskbar work area and DPI (fail closed)
+        if: always()
+        shell: pwsh
+        run: |
+          $receipt = Join-Path $env:RUNNER_TEMP 'signal-sprint-gui-receipt.json'
+          $shot = Join-Path $env:RUNNER_TEMP 'signal-sprint-gui.png'
+          $review = Join-Path $env:RUNNER_TEMP 'signal-sprint-visibility-review.json'
+          if (-not (Test-Path -LiteralPath $receipt -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $shot -PathType Leaf)) {
+            throw 'WINDOW_VISIBILITY_HOLD: real receipt/screenshot missing'
+          }
+          python provisioner-qa/gdk_signal_sprint_window_visibility.py --receipt $receipt --screenshot $shot | Tee-Object -FilePath $review
+          if ($LASTEXITCODE -ne 0) {
+            throw 'WINDOW_VISIBILITY_HOLD: inspect independent geometry review; 125/150 DPI remain unverified'
+          }
+      - name: Publish check-only receipt and optional screenshot even on HOLD
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-real-gui-check-only-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/signal-sprint-gui-receipt.json
+            ${{ runner.temp }}/signal-sprint-gui*.png
+            ${{ runner.temp }}/signal-sprint-visibility-review.json
+          if-no-files-found: warn
+          retention-days: 14
