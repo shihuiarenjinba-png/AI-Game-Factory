@@ -85,7 +85,7 @@ def extended_errors(session, root):
                     im.verify()
         except (OSError, ValueError, SyntaxError):
             errors.append("RESTART_SCREENSHOT_MISSING_OR_INVALID")
-    if restart.get("sha256") in {shots[k].get("sha256") for k in PHASES[:3] if isinstance(shots[k], dict)}:
+    if restart.get("path") in {shots[k].get("path") for k in PHASES[:3] if isinstance(shots[k], dict)}:
         errors.append("RESTART_SCREENSHOT_REUSED")
     answers = session.get("human_answers")
     if not isinstance(answers, dict) or any(answers.get(k) is not True for k in EXTRA_ANSWERS):
@@ -100,15 +100,15 @@ def extended_errors(session, root):
 def aggregate(sessions, root):
     errors = []
     base_sessions = []
-    seen_screenshot_sha = set()
+    seen_screenshot_paths = set()
     for s in sessions:
         errors.extend(extended_errors(s, root))
         if isinstance(s, dict) and isinstance(s.get("screenshots"), dict):
             for shot in s["screenshots"].values():
-                sha = shot.get("sha256") if isinstance(shot, dict) else None
-                if not sha or sha in seen_screenshot_sha:
+                path = shot.get("path") if isinstance(shot, dict) else None
+                if not path or path in seen_screenshot_paths:
                     errors.append("REUSED_OR_MISSING_SCREENSHOT_BETWEEN_PHASES_OR_SESSIONS")
-                seen_screenshot_sha.add(sha)
+                seen_screenshot_paths.add(path)
         if isinstance(s, dict) and isinstance(s.get("screenshots"), dict):
             t = dict(s)
             t["screenshots"] = {k: s["screenshots"][k] for k in PHASES[:3] if k in s["screenshots"]}
