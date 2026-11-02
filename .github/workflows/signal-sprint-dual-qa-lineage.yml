@@ -43,8 +43,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p evidence
-          gh api /repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/13180405918/zip > evidence/pinned-13180405918.zip
-          gh api /repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/13185196046/zip > evidence/candidate-13185196046.zip
+          gh api repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/13180405918/zip > evidence/pinned-13180405918.zip
+          gh api repos/shihuiarenjinba-png/AI-Game-Factory/actions/artifacts/13185196046/zip > evidence/candidate-13185196046.zip
       - name: Validate both nested ZIPs, EXE bytes, GUI receipt, source/request and HOLD gates
         shell: bash
         run: |
