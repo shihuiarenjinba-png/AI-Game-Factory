@@ -155,7 +155,7 @@ def ui_message(message, language):
 
 def ui_window_size(work_width, work_height):
     """Conservative *client* dimensions; reserve space for window chrome."""
-    if work_width < 840 or work_height < 600:
+    if work_width < 840 or work_height < 636:
         raise ValueError("Work area too small for the supported game UI")
     return min(900, work_width - 80), min(620, work_height - 96)
 
