@@ -197,7 +197,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: shihuiarenjinba-png/Repository-Provisioner-game
-          ref: d77cf88977db943d83cf898aae5bbf027e5aed90
+          ref: b53f89fc0b59871ba8f5cc7c62703bfdcc20d53a
           path: provisioner-qa
           persist-credentials: false
       - name: Download EXISTING Factory run artifact (never rebuild)
