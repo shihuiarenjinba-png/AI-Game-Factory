@@ -114,7 +114,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: shihuiarenjinba-png/Repository-Provisioner-game
-          ref: 97129ef972e3d166a35ea6e03a3c70707f5f42a4
+          ref: bc1b7f50d34e3707699b6aa0ce6314f20499631f
           path: provisioner
           persist-credentials: false
       - uses: actions/setup-python@v5
