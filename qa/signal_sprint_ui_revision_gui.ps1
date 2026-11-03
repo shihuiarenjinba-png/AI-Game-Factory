@@ -68,6 +68,7 @@ $receipt = [ordered]@{
   gdk_sdk_executed = $false
   msixvc2_built = $false
   store_submitted = $false
+  focus_evidence = @()
   status = 'GUI_CHECK_ONLY_HOLD'
   reason = 'NOT_EXECUTED'
 }
@@ -141,9 +142,28 @@ function Check-VisibleButtons([string]$language, $window, $work) {
     return 'HOLD_UIA_BUTTONS_UNAVAILABLE'
   }
 }
+# Native foreground-window ownership is measured immediately before every key.
+# AppActivate returning successfully is not evidence that the game owns focus.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SignalSprintForeground {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+'@
+$focusEvidence = [System.Collections.Generic.List[object]]::new()
 function Press-Key([string]$key, [int]$pidValue) {
   [Microsoft.VisualBasic.Interaction]::AppActivate($pidValue) | Out-Null
   Start-Sleep -Milliseconds 200
+  $foreground = [SignalSprintForeground]::GetForegroundWindow()
+  [uint32]$foregroundPid = 0
+  if ($foreground -ne [IntPtr]::Zero) {
+    [void][SignalSprintForeground]::GetWindowThreadProcessId($foreground, [ref]$foregroundPid)
+  }
+  $owned = ($foreground -ne [IntPtr]::Zero -and $foregroundPid -eq [uint32]$pidValue)
+  $focusEvidence.Add([ordered]@{ key = $key; expected_pid = $pidValue; foreground_pid = $foregroundPid; foreground_handle = $foreground.ToInt64(); owned_before_input = $owned })
+  Assert $owned 'FOCUS_OWNER_MISMATCH_BEFORE_KEY'
   [System.Windows.Forms.SendKeys]::SendWait($key)
   Start-Sleep -Milliseconds 400
 }
@@ -377,8 +397,11 @@ try {
   }
   $parent = Split-Path -Parent $ReceiptPath
   if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+  $receipt.focus_evidence = @($focusEvidence.ToArray())
   $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ReceiptPath -Encoding UTF8
   Write-Host ($receipt | ConvertTo-Json -Compress -Depth 8)
 }
 if ($receipt.status -ne 'GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY') { exit 2 }
+if (@($receipt.focus_evidence).Count -lt 1 -or @($receipt.focus_evidence | Where-Object { -not $_.owned_before_input }).Count -gt 0) { exit 3 }
+if ($receipt.en_buttons_in_workarea -ne 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY' -or $receipt.jp_buttons_in_workarea -ne 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY' -or $receipt.lost_text_semantics -ne 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED' -or $receipt.en_lost_text_semantics -ne 'UIAUTOMATION_EN_LOST_TEXT_OBSERVED') { exit 4 }
 exit 0

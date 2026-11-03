@@ -7,6 +7,7 @@ on:
       - codex/signal-sprint-dual-qa-lineage-20261103
       - codex/signal-sprint-current-artifact-physical-qa-20261103
       - codex/signal-sprint-workarea-aware-ui-20261103
+      - codex/signal-sprint-uia-failclosed-20261103
   pull_request:
     branches:
       - codex/game-signal-sprint-undo-20261027
@@ -45,6 +46,7 @@ jobs:
           git merge-base --is-ancestor c058cbf7fe38e02d929c67d047d717ff74bd522e HEAD
           test "$(git rev-parse HEAD)" = "$SIGNAL_SPRINT_REVISION_SHA"
           python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+          python -m unittest discover -s qa -p 'test_signal_sprint_strict_uia_receipt.py' -v
       - name: Audit exact PR53 GDK staging contract read-only (not GDK READY)
         shell: bash
         run: |
@@ -90,6 +92,8 @@ jobs:
           if ((git rev-parse HEAD).Trim() -cne $env:SIGNAL_SPRINT_REVISION_SHA) { throw 'REVISION_HEAD_DRIFT' }
           python -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'UNIT_TESTS_FAILED' }
+          python -m unittest discover -s qa -p 'test_signal_sprint_strict_uia_receipt.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'STRICT_UIA_NEGATIVE_TESTS_FAILED' }
       - name: Audit exact PR53 GDK staging contract read-only (not GDK READY)
         shell: pwsh
         run: |
@@ -115,6 +119,13 @@ jobs:
         run: |
           & .\qa\signal_sprint_ui_revision_gui.ps1 -ExePath .\dist\game\SignalSprint.exe -ReceiptPath .\evidence\ui-revision-receipt.json -ScreenshotDir .\evidence\screenshots
           if ($LASTEXITCODE -ne 0) { throw "REAL_GUI_CHECK_ONLY_HOLD: $LASTEXITCODE" }
+      - name: Strict UIA gate on actual Windows receipt (real PASS required)
+        shell: pwsh
+        run: |
+          python qa/signal_sprint_strict_uia_receipt.py evidence/ui-revision-receipt.json --output evidence/strict-uia-gate.json
+          if ($LASTEXITCODE -ne 0) { throw 'STRICT_UIA_REAL_RECEIPT_HOLD' }
+          python -c 'import json; r=json.load(open("evidence/strict-uia-gate.json")); assert r["status"]=="CHECK_ONLY_PASS" and r["reasons"]==[] and r["physical_windows"]=="PHYSICAL_HOLD" and r["gdk_package"]=="GDK_HOLD"'
+          if ($LASTEXITCODE -ne 0) { throw 'STRICT_UIA_REAL_PASS_INVALID' }
       - name: Verify same-EXE 30-move receipt and screenshot SHA bindings
         shell: pwsh
         run: |
