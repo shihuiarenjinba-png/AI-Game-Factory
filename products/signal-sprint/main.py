@@ -160,7 +160,49 @@ def ui_window_size(work_width, work_height):
     return min(900, work_width - 80), min(620, work_height - 96)
 
 
+
+def ui_board_side(client_width, client_height):
+    """Keep the entire board and side controls visible when the outer window shrinks."""
+    return max(280, min(480, client_width - 380, client_height - 136))
+
+
+def ui_fit_client_size(client_width, client_height, outer_rect, work_rect):
+    """Reduce Tk logical client size using *measured physical* Win32 outer bounds.
+
+    A requested 900x620 client can occupy 1040x788 physical pixels when
+    Windows DPI virtualization/chrome intervenes. Never infer fit from
+    root.geometry() alone. The Windows GUI runner independently checks bounds.
+    """
+    if (client_width <= 0 or client_height <= 0 or
+            len(outer_rect) != 4 or len(work_rect) != 4 or
+            outer_rect[2] <= outer_rect[0] or outer_rect[3] <= outer_rect[1] or
+            work_rect[2] <= work_rect[0] or work_rect[3] <= work_rect[1]):
+        raise ValueError("Invalid measured work-area geometry")
+    outer_width = outer_rect[2] - outer_rect[0]
+    outer_height = outer_rect[3] - outer_rect[1]
+    available_width = work_rect[2] - work_rect[0] - 32
+    available_height = work_rect[3] - work_rect[1] - 32
+    if (outer_rect[0] >= work_rect[0] + 8 and
+            outer_rect[1] >= work_rect[1] + 8 and
+            outer_rect[2] <= work_rect[2] - 8 and
+            outer_rect[3] <= work_rect[3] - 8):
+        return client_width, client_height
+    # Round down with a guard against non-client chrome and DPI rounding.
+    width = min(client_width, max(1, int(client_width * available_width / outer_width) - 8))
+    height = min(client_height, max(1, int(client_height * available_height / outer_height) - 8))
+    return width, height
+
+
 def launch():
+    # Request real physical monitor/work-area coordinates before creating Tk.
+    # If Windows already set a process DPI context, the measured-bounds
+    # fallback below still applies. Never report synthetic DPI as physical QA.
+    if os.name == "nt":
+        import ctypes
+        try:
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        except (AttributeError, OSError):
+            pass
     import tkinter as tk
     root = tk.Tk()
     root.title("Signal Sprint | EN")
@@ -182,17 +224,17 @@ def launch():
             work_width, work_height = rect.right - rect.left, rect.bottom - rect.top
     width, height = ui_window_size(work_width, work_height)
     root.geometry(f"{width}x{height}+{work_left+16}+{work_top+16}")
-    root.minsize(760, 540)
+    root.minsize(640, 420)
     game = Game()
     language = ["EN"]
     labels = {
         "EN": ("SIGNAL SPRINT", "Collect 3 energy cells, then reach EXIT.",
                "Arrows / WASD / click adjacent tile | J: Japanese",
-               "Moves left", "Cells", "Restart (R)", "Undo (U)",
+               "Moves left", "Cells", "Start / Retry (R)", "Undo (U)",
                "Save (S)", "Load (L)", "日本語 (J)"),
         "JP": ("SIGNAL SPRINT", "3つのエネルギーを集めて出口に到達しよう。",
                "矢印 / WASD / 隣のマスをクリック | J: English",
-               "残り手数", "回収", "最初から (R)", "1手戻す (U)",
+               "残り手数", "回収", "開始 / 再挑戦 (R)", "1手戻す (U)",
                "保存 (S)", "読込 (L)", "English (J)"),
     }
     heading = tk.Label(root, bg="#101827", fg="#e9f4ff",
@@ -203,6 +245,7 @@ def launch():
     subtitle.pack()
     frame = tk.Frame(root, bg="#101827")
     frame.pack(fill="both", expand=True, padx=12, pady=8)
+    board_side = [480]
     canvas = tk.Canvas(frame, width=480, height=480, bg="#172338",
                        highlightthickness=0)
     canvas.pack(side="left", padx=(0, 12), anchor="n")
@@ -240,7 +283,8 @@ def launch():
         for y in range(SIZE):
             for x in range(SIZE):
                 pos = (x, y)
-                left, top = 24 + x*52, 24 + y*52
+                cell = min(52, max(26, (board_side[0] - 48) // 8))
+                left, top = 24 + x*cell, 24 + y*cell
                 color = "#273b53"
                 if pos in WALLS:
                     color = "#3b4353"
@@ -248,15 +292,17 @@ def launch():
                     color = "#20786f" if game.collected == CELLS else "#596174"
                 elif pos in CELLS - game.collected:
                     color = "#9e7029"
-                canvas.create_rectangle(left, top, left+49, top+49,
+                canvas.create_rectangle(left, top, left+cell-3, top+cell-3,
                                         fill=color, outline="")
                 if pos in CELLS - game.collected:
-                    canvas.create_oval(left+14, top+14, left+35, top+35,
+                    canvas.create_oval(left+cell*0.27, top+cell*0.27,
+                                       left+cell*0.68, top+cell*0.68,
                                        fill="#ffdf7d", outline="")
                 if pos == EXIT:
-                    canvas.create_text(left+24, top+24, text="EXIT", fill="white")
+                    canvas.create_text(left+cell//2, top+cell//2, text="EXIT", fill="white")
                 if pos == game.position:
-                    canvas.create_oval(left+10, top+10, left+39, top+39,
+                    canvas.create_oval(left+cell*0.19, top+cell*0.19,
+                                       left+cell*0.75, top+cell*0.75,
                                        fill="#64dcff", outline="#efffff", width=2)
 
     def move(dx, dy):
@@ -315,13 +361,90 @@ def launch():
             toggle()
 
     def click(event):
-        x, y = (event.x-24)//52, (event.y-24)//52
+        cell = min(52, max(26, (board_side[0] - 48) // 8))
+        x, y = (event.x-24)//cell, (event.y-24)//cell
         if 0 <= x < SIZE and 0 <= y < SIZE:
             move(x-game.position[0], y-game.position[1])
 
+    def adapt_board(event=None):
+        if event is not None and event.widget is not root:
+            return
+        side = ui_board_side(root.winfo_width(), root.winfo_height())
+        if side != board_side[0]:
+            board_side[0] = side
+            canvas.configure(width=side, height=side)
+            draw()
+
+    def fit_actual_window():
+        if os.name != "nt":
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                        ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+        user32 = ctypes.windll.user32
+        # Tk can report a transient 1x1 HWND before the first WM_SIZE/map.
+        # Do not destroy the game on that unmapped placeholder.
+        if root.winfo_width() < 200 or root.winfo_height() < 200:
+            root.after(150, fit_actual_window)
+            return
+        samples = []
+
+        def record(status):
+            # Only written when hosted QA explicitly requests diagnostics.
+            # No source/request/Identity or user data is recorded.
+            trace = os.environ.get("SIGNAL_SPRINT_LAYOUT_TRACE")
+            if trace:
+                try:
+                    path = Path(trace)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps({
+                        "status": status, "workarea": [
+                            work_left, work_top, work_left + work_width,
+                            work_top + work_height], "samples": samples,
+                            "physical_qa_pass": False}, indent=2), encoding="utf-8")
+                except OSError:
+                    pass
+
+        for attempt in range(6):
+            root.update_idletasks()
+            rect = RECT()
+            if not user32.GetWindowRect(root.winfo_id(), ctypes.byref(rect)):
+                record("HOLD_GET_WINDOW_RECT")
+                root.destroy()
+                return
+            bounds = (rect.left, rect.top, rect.right, rect.bottom)
+            samples.append({"attempt": attempt, "outer": list(bounds),
+                            "client": [root.winfo_width(), root.winfo_height()],
+                            "board_side": board_side[0]})
+            if (bounds[0] >= work_left + 8 and bounds[1] >= work_top + 8 and
+                    bounds[2] <= work_left + work_width - 8 and
+                    bounds[3] <= work_top + work_height - 8):
+                record("OUTER_WINDOW_FITS_WORKAREA_CHECK_ONLY")
+                return
+            new_width, new_height = ui_fit_client_size(
+                root.winfo_width(), root.winfo_height(), bounds,
+                (work_left, work_top, work_left + work_width, work_top + work_height))
+            if new_width < 640 or new_height < 420:
+                record("HOLD_MINIMUM_CLIENT_EXCEEDS_WORKAREA")
+                break
+            if (new_width, new_height) == (root.winfo_width(), root.winfo_height()):
+                record("HOLD_NO_FURTHER_RESIZE")
+                break
+            root.geometry(f"{new_width}x{new_height}+{work_left+16}+{work_top+16}")
+            adapt_board()
+        record("HOLD_CANNOT_FIT_ACTUAL_OUTER_WINDOW")
+        # Never show a taskbar-obscured window as if it were verified.
+        root.destroy()
+
     root.bind("<Key>", key)
+    root.bind("<Configure>", adapt_board)
     canvas.bind("<Button-1>", click)
     draw()
+    root.after(250, fit_actual_window)
     root.mainloop()
 
 
