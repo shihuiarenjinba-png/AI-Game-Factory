@@ -386,6 +386,11 @@ def launch():
                         ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
 
         user32 = ctypes.windll.user32
+        # Tk can report a transient 1x1 HWND before the first WM_SIZE/map.
+        # Do not destroy the game on that unmapped placeholder.
+        if root.winfo_width() < 200 or root.winfo_height() < 200:
+            root.after(150, fit_actual_window)
+            return
         samples = []
 
         def record(status):
@@ -439,7 +444,7 @@ def launch():
     root.bind("<Configure>", adapt_board)
     canvas.bind("<Button-1>", click)
     draw()
-    root.after_idle(fit_actual_window)
+    root.after(250, fit_actual_window)
     root.mainloop()
 
 
