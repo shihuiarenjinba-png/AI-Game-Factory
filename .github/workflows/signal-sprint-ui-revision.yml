@@ -14,6 +14,7 @@ on:
       - codex/game-signal-sprint-physical-qa-bundle-20261103
 env:
   SIGNAL_SPRINT_REVISION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  SIGNAL_SPRINT_LAYOUT_TRACE: evidence/workarea-layout-trace.json
 permissions:
   contents: read
 jobs:
