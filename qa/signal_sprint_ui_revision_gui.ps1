@@ -58,6 +58,8 @@ $receipt = [ordered]@{
   exhaustion_gui_check_only = 'HOLD_NOT_EXECUTED'
   input_pixel_change_observed = $false
   ui_automation_controls = 'HOLD_UNVERIFIED'
+  en_buttons_in_workarea = 'HOLD_UNMEASURED'
+  jp_buttons_in_workarea = 'HOLD_UNMEASURED'
   dpi_125_150 = 'HOLD_NOT_TESTED'
   jp_gameplay_text_verified = $false
   human_qa_pass = $false
@@ -105,6 +107,39 @@ function Capture-Window([string]$name, $rect) {
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
   } finally { $bmp.Dispose() }
+}
+function Check-VisibleButtons([string]$language, $window, $work) {
+  # UIA is supplementary to the physical GetWindowRect/monitor screenshot.
+  # An unavailable Tk UIA tree must NEVER become a fabricated visibility PASS.
+  try {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button)
+    $controls = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    if ($controls.Count -lt 5) { return 'HOLD_UIA_FIVE_BUTTONS_NOT_EXPOSED' }
+    $names = @()
+    foreach ($control in $controls) {
+      $rect = $control.Current.BoundingRectangle
+      Assert ($rect.Width -gt 0 -and $rect.Height -gt 0 -and
+              $rect.Left -ge $work.Left -and $rect.Top -ge $work.Top -and
+              $rect.Right -le $work.Right -and $rect.Bottom -le $work.Bottom) 'BUTTON_OUTSIDE_TASKBAR_WORKAREA'
+      if ($control.Current.Name) { $names += [string]$control.Current.Name }
+    }
+    $all = $names -join ' '
+    if ($language -eq 'EN') {
+      if ($all -notmatch 'Start|Retry|Restart' -or $all -notmatch '\u65e5\u672c\u8a9e') {
+        return 'HOLD_UIA_EN_BUTTON_LABELS_NOT_EXPOSED'
+      }
+    } else {
+      if ($all -notmatch '\u518d\u6311\u6226|\u6700\u521d\u304b\u3089' -or $all -notmatch 'English') {
+        return 'HOLD_UIA_JP_BUTTON_LABELS_NOT_EXPOSED'
+      }
+    }
+    return 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY'
+  } catch {
+    if ($_.Exception.Message -eq 'BUTTON_OUTSIDE_TASKBAR_WORKAREA') { throw }
+    return 'HOLD_UIA_BUTTONS_UNAVAILABLE'
+  }
 }
 function Press-Key([string]$key, [int]$pidValue) {
   [Microsoft.VisualBasic.Interaction]::AppActivate($pidValue) | Out-Null
@@ -172,6 +207,7 @@ try {
   Assert ($win.Left -ge $work.Left -and $win.Top -ge $work.Top -and
           $win.Right -le $work.Right -and $win.Bottom -le $work.Bottom) 'WINDOW_OUTSIDE_WORK_AREA'
   $receipt.en_screenshot_sha256 = Capture-Monitor 'signal-sprint-en.png' $screen
+  $receipt.en_buttons_in_workarea = Check-VisibleButtons 'EN' $window $work
   try {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
       [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -186,6 +222,7 @@ try {
   Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'JAPANESE_TOGGLE_NOT_OBSERVED'
   $receipt.jp_window_title_observed = $true
   $receipt.jp_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp.png' $screen
+  $receipt.jp_buttons_in_workarea = Check-VisibleButtons 'JP' $window $work
   Assert ($receipt.en_screenshot_sha256 -ne $receipt.jp_screenshot_sha256) 'JAPANESE_SCREEN_NO_PIXEL_CHANGE'
   $receipt.jp_window_sha256 = Capture-Window 'signal-sprint-jp-window-initial.png' $win
   Press-Key '{RIGHT}' $guiProcess.Id
