@@ -165,6 +165,9 @@ try {
   Add-Type -AssemblyName Microsoft.VisualBasic
   New-Item -ItemType Directory -Force -Path $ScreenshotDir | Out-Null
   $exe = (Resolve-Path -LiteralPath $ExePath).Path
+  # The EXE starts in dist/game; use an absolute path so its fail-closed
+  # physical-geometry trace is uploaded with evidence even if Tk exits.
+  $env:SIGNAL_SPRINT_LAYOUT_TRACE = Join-Path (Get-Location).Path 'evidence/workarea-layout-trace.json'
   $proc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -PassThru
   $window = $null
   $guiProcess = $null
