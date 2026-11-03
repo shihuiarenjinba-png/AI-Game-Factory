@@ -119,13 +119,13 @@ jobs:
         run: |
           & .\qa\signal_sprint_ui_revision_gui.ps1 -ExePath .\dist\game\SignalSprint.exe -ReceiptPath .\evidence\ui-revision-receipt.json -ScreenshotDir .\evidence\screenshots
           if ($LASTEXITCODE -ne 0) { throw "REAL_GUI_CHECK_ONLY_HOLD: $LASTEXITCODE" }
-      - name: Strict UIA gate on actual Windows receipt (HOLD expected until per-key focus/UIA complete)
+      - name: Strict UIA gate on actual Windows receipt (real PASS required)
         shell: pwsh
         run: |
           python qa/signal_sprint_strict_uia_receipt.py evidence/ui-revision-receipt.json --output evidence/strict-uia-gate.json
-          if ($LASTEXITCODE -ne 2) { throw 'STRICT_UIA_UNEXPECTED_PASS_OR_ERROR' }
-          python -c 'import json; r=json.load(open("evidence/strict-uia-gate.json")); assert r["status"]=="UIA_HOLD" and "FOCUS_EVIDENCE_MISSING" in r["reasons"] and r["physical_windows"]=="PHYSICAL_HOLD" and r["gdk_package"]=="GDK_HOLD"'
-          if ($LASTEXITCODE -ne 0) { throw 'STRICT_UIA_HOLD_RECEIPT_INVALID' }
+          if ($LASTEXITCODE -ne 0) { throw 'STRICT_UIA_REAL_RECEIPT_HOLD' }
+          python -c 'import json; r=json.load(open("evidence/strict-uia-gate.json")); assert r["status"]=="CHECK_ONLY_PASS" and r["reasons"]==[] and r["physical_windows"]=="PHYSICAL_HOLD" and r["gdk_package"]=="GDK_HOLD"'
+          if ($LASTEXITCODE -ne 0) { throw 'STRICT_UIA_REAL_PASS_INVALID' }
       - name: Verify same-EXE 30-move receipt and screenshot SHA bindings
         shell: pwsh
         run: |
