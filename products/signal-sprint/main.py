@@ -386,28 +386,53 @@ def launch():
                         ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
 
         user32 = ctypes.windll.user32
-        for _ in range(6):
+        samples = []
+
+        def record(status):
+            # Only written when hosted QA explicitly requests diagnostics.
+            # No source/request/Identity or user data is recorded.
+            trace = os.environ.get("SIGNAL_SPRINT_LAYOUT_TRACE")
+            if trace:
+                try:
+                    path = Path(trace)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps({
+                        "status": status, "workarea": [
+                            work_left, work_top, work_left + work_width,
+                            work_top + work_height], "samples": samples,
+                            "physical_qa_pass": False}, indent=2), encoding="utf-8")
+                except OSError:
+                    pass
+
+        for attempt in range(6):
             root.update_idletasks()
             rect = RECT()
             if not user32.GetWindowRect(root.winfo_id(), ctypes.byref(rect)):
-                root.destroy()  # No unverified work-area success.
+                record("HOLD_GET_WINDOW_RECT")
+                root.destroy()
                 return
             bounds = (rect.left, rect.top, rect.right, rect.bottom)
+            samples.append({"attempt": attempt, "outer": list(bounds),
+                            "client": [root.winfo_width(), root.winfo_height()],
+                            "board_side": board_side[0]})
             if (bounds[0] >= work_left + 8 and bounds[1] >= work_top + 8 and
                     bounds[2] <= work_left + work_width - 8 and
                     bounds[3] <= work_top + work_height - 8):
+                record("OUTER_WINDOW_FITS_WORKAREA_CHECK_ONLY")
                 return
             new_width, new_height = ui_fit_client_size(
                 root.winfo_width(), root.winfo_height(), bounds,
                 (work_left, work_top, work_left + work_width, work_top + work_height))
             if new_width < 640 or new_height < 420:
+                record("HOLD_MINIMUM_CLIENT_EXCEEDS_WORKAREA")
                 break
             if (new_width, new_height) == (root.winfo_width(), root.winfo_height()):
+                record("HOLD_NO_FURTHER_RESIZE")
                 break
             root.geometry(f"{new_width}x{new_height}+{work_left+16}+{work_top+16}")
             adapt_board()
-        # If Tk cannot fit all content, do not leave an apparently usable
-        # taskbar-obscured window on screen. The hosted GUI check must HOLD.
+        record("HOLD_CANNOT_FIT_ACTUAL_OUTER_WINDOW")
+        # Never show a taskbar-obscured window as if it were verified.
         root.destroy()
 
     root.bind("<Key>", key)
