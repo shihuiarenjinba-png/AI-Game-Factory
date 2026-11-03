@@ -37,6 +37,12 @@ class WorkAreaAwareUIFixtures(unittest.TestCase):
         self.assertEqual(width, 900)
         self.assertLess(height, 620)
 
+    def test_transient_unmapped_1x1_window_is_not_treated_as_real(self):
+        source = MODULE.read_text(encoding="utf-8")
+        self.assertIn("root.winfo_width() < 200", source)
+        with self.assertRaises(ValueError):
+            ui.ui_fit_client_size(1, 1, (0, 0, 1, 1), (0, 0, 0, 0))
+
     def test_rejects_invalid_physical_bounds(self):
         for bounds, work in (
             ((0, 0, 0, 100), (0, 0, 1024, 720)),
@@ -56,7 +62,7 @@ class WorkAreaAwareUIFixtures(unittest.TestCase):
         for required in ("Start / Retry (R)", "開始 / 再挑戦 (R)",
                          "日本語 (J)", "English (J)",
                          "SetProcessDpiAwarenessContext",
-                         "GetWindowRect", "root.after_idle(fit_actual_window)"):
+                         "GetWindowRect", "root.after(250, fit_actual_window)"):
             self.assertIn(required, source)
         self.assertEqual(ui.UI_STATUS_JP["LOST"], "失敗")
         self.assertIn("Rで再挑戦", ui.ui_message(
