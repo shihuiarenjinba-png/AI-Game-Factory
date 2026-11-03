@@ -31,17 +31,19 @@ def validate(receipt):
     for key, expected in REQUIRED.items():
         if receipt.get(key) != expected:
             errors.append("UIA_" + key.upper() + "_HOLD")
-    # AppActivate alone does not establish focus ownership. The runner must
-    # independently record foreground HWND and expected GUI HWND at every key.
-    events = receipt.get("focus_events")
+    # Validate the foreground PID measured by Windows immediately before SendKeys.
+    events = receipt.get("focus_evidence")
     if not isinstance(events, list) or len(events) < 68:
         errors.append("FOCUS_EVIDENCE_MISSING")
     else:
         for index, event in enumerate(events):
             if (not isinstance(event, dict) or
-                not event.get("expected_hwnd") or
-                event.get("foreground_hwnd") != event.get("expected_hwnd") or
-                event.get("verified_before_send") is not True):
+                not isinstance(event.get("expected_pid"), int) or
+                event.get("expected_pid") <= 0 or
+                event.get("foreground_pid") != event.get("expected_pid") or
+                not isinstance(event.get("foreground_handle"), int) or
+                event.get("foreground_handle") == 0 or
+                event.get("owned_before_input") is not True):
                 errors.append("FOCUS_MISMATCH_AT_" + str(index))
                 break
     for lang in ("en", "jp"):
