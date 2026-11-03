@@ -14,8 +14,8 @@ def valid():
              status="GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY",
              en_screenshot_sha256="c"*64, jp_screenshot_sha256="d"*64,
              human_qa_pass=False, sale_ready=False,
-             focus_events=[dict(expected_hwnd="123", foreground_hwnd="123",
-                                verified_before_send=True) for _ in range(68)])
+             focus_evidence=[dict(expected_pid=123, foreground_pid=123,
+                                  foreground_handle=456, owned_before_input=True) for _ in range(68)])
     return r
 
 class TestFailClosed(unittest.TestCase):
@@ -28,10 +28,10 @@ class TestFailClosed(unittest.TestCase):
         r=valid(); r["lost_text_semantics"]="HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED"
         self.assertTrue(module.validate(r))
     def test_focus_unbound(self):
-        r=valid(); r.pop("focus_events")
+        r=valid(); r.pop("focus_evidence")
         self.assertIn("FOCUS_EVIDENCE_MISSING",module.validate(r))
     def test_wrong_foreground(self):
-        r=valid(); r["focus_events"][10]["foreground_hwnd"]="999"
+        r=valid(); r["focus_evidence"][10]["foreground_pid"]=999
         self.assertIn("FOCUS_MISMATCH_AT_10",module.validate(r))
     def test_old_exe_unbound(self):
         r=valid(); r["exe_sha256"]=""
