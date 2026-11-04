@@ -70,7 +70,7 @@ def validate(receipt, evidence_dir=None):
         errors.append("FOCUS_EVIDENCE_MISSING")
     else:
         for index, (event, expected) in enumerate(zip(events, expected_inputs())):
-            if any(event.get(k) != v for k, v in expected.items()):
+            if not isinstance(event, dict) or any(event.get(k) != v for k, v in expected.items()):
                 errors.append("INPUT_SEQUENCE_MISMATCH_AT_" + str(index))
                 break
             if (not isinstance(event, dict) or
