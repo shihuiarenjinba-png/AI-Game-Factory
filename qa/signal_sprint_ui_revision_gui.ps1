@@ -153,6 +153,8 @@ public static class SignalSprintForeground {
 }
 '@
 $focusEvidence = [System.Collections.Generic.List[object]]::new()
+$script:inputPhase = 'JP_TOGGLE'
+$script:inputLanguage = 'EN'
 function Press-Key([string]$key, [int]$pidValue) {
   [Microsoft.VisualBasic.Interaction]::AppActivate($pidValue) | Out-Null
   Start-Sleep -Milliseconds 200
@@ -162,7 +164,7 @@ function Press-Key([string]$key, [int]$pidValue) {
     [void][SignalSprintForeground]::GetWindowThreadProcessId($foreground, [ref]$foregroundPid)
   }
   $owned = ($foreground -ne [IntPtr]::Zero -and $foregroundPid -eq [uint32]$pidValue)
-  $focusEvidence.Add([ordered]@{ key = $key; expected_pid = $pidValue; foreground_pid = $foregroundPid; foreground_handle = $foreground.ToInt64(); owned_before_input = $owned })
+  $focusEvidence.Add([ordered]@{ sequence = $focusEvidence.Count + 1; phase = $script:inputPhase; language = $script:inputLanguage; key = $key; expected_pid = $pidValue; foreground_pid = $foregroundPid; foreground_handle = $foreground.ToInt64(); owned_before_input = $owned })
   Assert $owned 'FOCUS_OWNER_MISMATCH_BEFORE_KEY'
   [System.Windows.Forms.SendKeys]::SendWait($key)
   Start-Sleep -Milliseconds 400
@@ -242,6 +244,8 @@ try {
     }
   } catch { $receipt.ui_automation_controls = 'HOLD_UNAVAILABLE' }
   Press-Key 'j' $guiProcess.Id
+  $script:inputLanguage = 'JP'
+  $script:inputPhase = 'JP_FIRST_MOVE'
   Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'JAPANESE_TOGGLE_NOT_OBSERVED'
   $receipt.jp_window_title_observed = $true
   $receipt.jp_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp.png' $screen
@@ -254,6 +258,7 @@ try {
   Assert ($receipt.input_pixel_change_observed) 'FIRST_INPUT_NO_PIXEL_CHANGE'
   $receipt.after_input_window_sha256 = Capture-Window 'signal-sprint-jp-window-after-right.png' $win
   Assert ($receipt.after_input_window_sha256 -ne $receipt.jp_window_sha256) 'RETRY_PRECONDITION_MOVE_NOT_VISIBLE'
+  $script:inputPhase = 'JP_RESET'
   Press-Key 'r' $guiProcess.Id
   Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'RETRY_CHANGED_LANGUAGE'
   $retryWin = $window.Current.BoundingRectangle
@@ -269,6 +274,7 @@ try {
   # This is the SAME real Windows EXE and the SAME process. Start from the
   # proven reset screen; use 30 legal corridor moves (RIGHT, LEFT, repeated).
   # The immutable Game.move() source determines the expected LOST state.
+  $script:inputPhase = 'JP_EXHAUSTION'
   $sequence = @()
   for ($turn = 1; $turn -le 30; $turn++) {
     $key = if ($turn % 2 -eq 1) { '{RIGHT}' } else { '{LEFT}' }
@@ -307,6 +313,7 @@ try {
     }
   } catch { $receipt.lost_text_semantics = 'HOLD_UIAUTOMATION_UNAVAILABLE' }
   $receipt.exhaustion_gui_check_only = 'REAL_30_KEYS_AND_CHANGED_LAST_FRAME_CHECK_ONLY'
+  $script:inputPhase = 'JP_LOST_RETRY'
   Press-Key 'r' $guiProcess.Id
   $resetRect = $window.Current.BoundingRectangle
   Assert ($resetRect.Left -ge $work.Left -and $resetRect.Top -ge $work.Top -and
@@ -314,6 +321,7 @@ try {
   $receipt.post_exhaustion_restart_window_sha256 = Capture-Window 'signal-sprint-jp-after-lost-restart.png' $resetRect
   $receipt.exhaustion_reset_pixel_match = ($receipt.post_exhaustion_restart_window_sha256 -eq $receipt.jp_window_sha256)
   Assert ($receipt.exhaustion_reset_pixel_match) 'EXHAUSTION_R_DID_NOT_RESTORE_INITIAL_PIXELS'
+  $script:inputPhase = 'JP_REPLAY'
   Press-Key '{RIGHT}' $guiProcess.Id
   $replayRect = $window.Current.BoundingRectangle
   $receipt.replay_window_sha256 = Capture-Window 'signal-sprint-jp-after-lost-replay-right.png' $replayRect
@@ -321,19 +329,25 @@ try {
   Assert ($receipt.replay_pixel_match) 'EXHAUSTION_REPLAY_FIRST_MOVE_MISMATCH'
   # Independent EN 30-turn exhaustion, restart and replay in the SAME process
   # and same packaged EXE. The JP screenshots above are never relabeled EN.
+  $script:inputPhase = 'EN_TOGGLE'
   Press-Key 'j' $guiProcess.Id
+  $script:inputLanguage = 'EN'
   Assert ($window.Current.Name -eq 'Signal Sprint | EN') 'ENGLISH_TOGGLE_NOT_OBSERVED'
+  $script:inputPhase = 'EN_RESET'
   Press-Key 'r' $guiProcess.Id
   $enRect = $window.Current.BoundingRectangle
   Assert ($enRect.Left -ge $work.Left -and $enRect.Top -ge $work.Top -and
           $enRect.Right -le $work.Right -and $enRect.Bottom -le $work.Bottom) 'EN_INITIAL_OUTSIDE_WORK_AREA'
   $receipt.en_window_sha256 = Capture-Window 'signal-sprint-en-window-initial.png' $enRect
+  $script:inputPhase = 'EN_FIRST_MOVE'
   Press-Key '{RIGHT}' $guiProcess.Id
   $receipt.en_after_input_window_sha256 = Capture-Window 'signal-sprint-en-window-after-right.png' $window.Current.BoundingRectangle
   Assert ($receipt.en_after_input_window_sha256 -ne $receipt.en_window_sha256) 'EN_FIRST_MOVE_NO_CHANGE'
+  $script:inputPhase = 'EN_PRE_EXHAUSTION_RESET'
   Press-Key 'r' $guiProcess.Id
   $enReset = Capture-Window 'signal-sprint-en-window-before-exhaustion.png' $window.Current.BoundingRectangle
   Assert ($enReset -eq $receipt.en_window_sha256) 'EN_PRE_EXHAUSTION_RESET_MISMATCH'
+  $script:inputPhase = 'EN_EXHAUSTION'
   $enSequence = @()
   for ($turn = 1; $turn -le 30; $turn++) {
     $key = if ($turn % 2 -eq 1) { '{RIGHT}' } else { '{LEFT}' }
@@ -367,9 +381,11 @@ try {
       $receipt.en_lost_text_semantics = 'HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED'
     }
   } catch { $receipt.en_lost_text_semantics = 'HOLD_UIAUTOMATION_UNAVAILABLE' }
+  $script:inputPhase = 'EN_LOST_RETRY'
   Press-Key 'r' $guiProcess.Id
   $receipt.en_post_exhaustion_restart_window_sha256 = Capture-Window 'signal-sprint-en-after-lost-restart.png' $window.Current.BoundingRectangle
   Assert ($receipt.en_post_exhaustion_restart_window_sha256 -eq $receipt.en_window_sha256) 'EN_R_DID_NOT_RESTORE_INITIAL_PIXELS'
+  $script:inputPhase = 'EN_REPLAY'
   Press-Key '{RIGHT}' $guiProcess.Id
   $receipt.en_replay_window_sha256 = Capture-Window 'signal-sprint-en-after-lost-replay-right.png' $window.Current.BoundingRectangle
   Assert ($receipt.en_replay_window_sha256 -eq $receipt.en_after_input_window_sha256) 'EN_REPLAY_FIRST_MOVE_MISMATCH'
