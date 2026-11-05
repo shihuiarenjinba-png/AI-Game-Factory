@@ -98,7 +98,10 @@ def validate(receipt, evidence_dir=None):
             if path.is_absolute() or ".." in path.parts:
                 errors.append("EVIDENCE_PATH_UNSAFE_" + field.upper())
                 continue
-            candidate = evidence_dir / path
+            candidate = (evidence_dir / path).resolve()
+            if not candidate.is_relative_to(evidence_dir.resolve()):
+                errors.append("EVIDENCE_PATH_ESCAPE_" + field.upper())
+                continue
             if not candidate.is_file() or file_sha256(candidate) != receipt.get(field):
                 errors.append("EVIDENCE_HASH_MISMATCH_" + field.upper())
     if receipt.get("human_qa_pass") is True or receipt.get("sale_ready") is True:
@@ -109,7 +112,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("receipt", type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--evidence-dir", type=Path)
+    parser.add_argument("--evidence-dir", type=Path, required=True)
     args = parser.parse_args()
     data = json.loads(args.receipt.read_text(encoding="utf-8-sig"))
     errors = validate(data, evidence_dir=args.evidence_dir)
