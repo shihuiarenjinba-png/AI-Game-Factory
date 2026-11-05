@@ -194,7 +194,8 @@ try {
   Copy-Item -LiteralPath $sourceExe -Destination $evidenceExe -Force
   Assert ((Get-FileHash -LiteralPath $evidenceExe -Algorithm SHA256).Hash.ToLowerInvariant() -eq $receipt.exe_sha256) 'EVIDENCE_EXE_COPY_HASH_MISMATCH'
   $receipt.exe_path = $evidenceExeName
-  $exe = (Resolve-Path -LiteralPath $evidenceExe).Path
+  # Execute the original location so bundled assets and working directory remain unchanged.
+  $exe = $sourceExe
   # The EXE starts in dist/game; use an absolute path so its fail-closed
   # physical-geometry trace is uploaded with evidence even if Tk exits.
   $env:SIGNAL_SPRINT_LAYOUT_TRACE = Join-Path (Get-Location).Path 'evidence/workarea-layout-trace.json'
