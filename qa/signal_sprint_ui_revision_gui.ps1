@@ -16,6 +16,7 @@ $receipt = [ordered]@{
   revision_sha = $env:SIGNAL_SPRINT_REVISION_SHA
   workflow_run_id = $env:GITHUB_RUN_ID
   exe_sha256 = $null
+  exe_path = $null
   exe_size_bytes = $null
   monitor_bounds = $null
   work_area_bounds = $null
@@ -186,7 +187,15 @@ try {
   Add-Type -AssemblyName System.Drawing
   Add-Type -AssemblyName Microsoft.VisualBasic
   New-Item -ItemType Directory -Force -Path $ScreenshotDir | Out-Null
-  $exe = (Resolve-Path -LiteralPath $ExePath).Path
+  # Keep the exact executed PE inside the evidence root for independent hashing.
+  $evidenceExeName = 'signal-sprint-qa-executed.exe'
+  $evidenceExe = Join-Path $ScreenshotDir $evidenceExeName
+  $sourceExe = (Resolve-Path -LiteralPath $ExePath).Path
+  Copy-Item -LiteralPath $sourceExe -Destination $evidenceExe -Force
+  Assert ((Get-FileHash -LiteralPath $evidenceExe -Algorithm SHA256).Hash.ToLowerInvariant() -eq $receipt.exe_sha256) 'EVIDENCE_EXE_COPY_HASH_MISMATCH'
+  $receipt.exe_path = $evidenceExeName
+  # Execute the original location so bundled assets and working directory remain unchanged.
+  $exe = $sourceExe
   # The EXE starts in dist/game; use an absolute path so its fail-closed
   # physical-geometry trace is uploaded with evidence even if Tk exits.
   $env:SIGNAL_SPRINT_LAYOUT_TRACE = Join-Path (Get-Location).Path 'evidence/workarea-layout-trace.json'
