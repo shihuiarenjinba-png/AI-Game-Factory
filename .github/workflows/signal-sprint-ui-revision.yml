@@ -15,6 +15,8 @@ on:
       - codex/game-signal-sprint-physical-qa-bundle-20261103
       - codex/signal-sprint-uia-event-contract-20261105
       - codex/signal-sprint-evidence-path-contract-20261105
+      - codex/signal-sprint-uia-workflow-repair-20261106
+      - codex/signal-sprint-uia-fixture-contract-20261106
 env:
   SIGNAL_SPRINT_REVISION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   SIGNAL_SPRINT_LAYOUT_TRACE: evidence/workarea-layout-trace.json
