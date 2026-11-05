@@ -14,8 +14,9 @@ def valid():
              status="GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY",
              en_screenshot_sha256="c"*64, jp_screenshot_sha256="d"*64,
              human_qa_pass=False, sale_ready=False,
-             focus_evidence=[dict(expected_pid=123, foreground_pid=123,
-                                  foreground_handle=456, owned_before_input=True) for _ in range(68)])
+             focus_evidence=[dict(event, expected_pid=123, foreground_pid=123,
+                                  foreground_handle=456, owned_before_input=True)
+                             for event in module.expected_inputs()])
     return r
 
 class TestFailClosed(unittest.TestCase):
