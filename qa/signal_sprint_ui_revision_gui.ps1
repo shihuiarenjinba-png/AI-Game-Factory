@@ -422,6 +422,18 @@ try {
   }
   $parent = Split-Path -Parent $ReceiptPath
   if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+  # Diagnostic evidence is recorded even when the strict UIA gate fails.
+  # Never turn missing controls or text into a PASS based on screenshots.
+  $receipt.uia_gate_checks = [ordered]@{
+    en_buttons = [ordered]@{ observed = $receipt.en_buttons_in_workarea; pass = ($receipt.en_buttons_in_workarea -eq 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY') }
+    jp_buttons = [ordered]@{ observed = $receipt.jp_buttons_in_workarea; pass = ($receipt.jp_buttons_in_workarea -eq 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY') }
+    jp_lost_text = [ordered]@{ observed = $receipt.lost_text_semantics; pass = ($receipt.lost_text_semantics -eq 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED') }
+    en_lost_text = [ordered]@{ observed = $receipt.en_lost_text_semantics; pass = ($receipt.en_lost_text_semantics -eq 'UIAUTOMATION_EN_LOST_TEXT_OBSERVED') }
+  }
+  $receipt.uia_gate_failed_checks = @($receipt.uia_gate_checks.Keys | Where-Object { -not $receipt.uia_gate_checks[$_].pass })
+  if ($receipt.uia_gate_failed_checks.Count -gt 0) {
+    Write-Warning ('STRICT_UIA_MISSING: ' + ($receipt.uia_gate_failed_checks -join ', '))
+  }
   $receipt.focus_evidence = @($focusEvidence.ToArray())
   $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ReceiptPath -Encoding UTF8
   Write-Host ($receipt | ConvertTo-Json -Compress -Depth 8)
