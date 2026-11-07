@@ -421,6 +421,8 @@ try {
   Assert ($receipt.en_exhaustion_move_count -eq 30) 'EN_MOVE_COUNT_WRONG'
   $receipt.en_exhausted_window_sha256 = Capture-Window 'signal-sprint-en-turn-30-expected-lost.png' $window.Current.BoundingRectangle
   Assert ($receipt.en_exhausted_window_sha256 -ne $receipt.en_pre_exhaustion_window_sha256) 'EN_LAST_MOVE_NO_PIXEL_CHANGE'
+  # Persist the English LOST UIA tree before semantic checks; screenshots are not text proof.
+  Capture-UIATree 'en-lost' $window
   try {
     $allText = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
       [System.Windows.Automation.Condition]::TrueCondition)
