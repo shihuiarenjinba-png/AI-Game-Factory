@@ -458,6 +458,17 @@ try {
 } catch {
   $receipt.status = 'GUI_CHECK_ONLY_HOLD'
   $receipt.reason = [string]$_.Exception.Message
+  # Preserve the exact failed phase and a best-effort UIA snapshot before cleanup.
+  # This is diagnostic evidence only; never convert an interrupted run to PASS.
+  $receipt.failed_input_phase = [string]$script:inputPhase
+  $receipt.failed_input_language = [string]$script:inputLanguage
+  try {
+    if ($null -ne $window -and $null -ne $guiProcess -and -not $guiProcess.HasExited) {
+      Capture-UIATree 'failure-last-reachable' $window
+    }
+  } catch {
+    $receipt.failure_snapshot_error = [string]$_.Exception.Message
+  }
 } finally {
   if ($null -ne $proc) {
     try {
