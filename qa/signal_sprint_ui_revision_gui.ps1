@@ -110,6 +110,47 @@ function Capture-Window([string]$name, $rect) {
     return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
   } finally { $bmp.Dispose() }
 }
+function Capture-UIATree([string]$phase, $window) {
+  # Capture actual Windows UIA evidence, including when the strict gate fails.
+  $entries = @()
+  $errorText = $null
+  try {
+    $elements = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($element in $elements) {
+      try {
+        $c = $element.Current
+        $b = $c.BoundingRectangle
+        $entries += [ordered]@{
+          control_type = [string]$c.ControlType.ProgrammaticName
+          name = [string]$c.Name
+          automation_id = [string]$c.AutomationId
+          process_id = [int]$c.ProcessId
+          is_enabled = [bool]$c.IsEnabled
+          is_offscreen = [bool]$c.IsOffscreen
+          bounds = @([double]$b.Left,[double]$b.Top,[double]$b.Right,[double]$b.Bottom)
+        }
+      } catch {
+        $entries += [ordered]@{ read_error = [string]$_.Exception.Message }
+      }
+    }
+  } catch { $errorText = [string]$_.Exception.Message }
+  $filename = "signal-sprint-uia-$phase.json"
+  $destination = Join-Path $ScreenshotDir $filename
+  $snapshot = [ordered]@{
+    phase = $phase
+    expected_process_id = [int]$guiProcess.Id
+    elements = $entries
+    enumeration_error = $errorText
+  }
+  $snapshot | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $destination -Encoding UTF8
+  $receipt["uia_tree_$phase"] = [ordered]@{
+    path = $filename
+    sha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+    element_count = $entries.Count
+    enumeration_error = $errorText
+  }
+}
 function Check-VisibleButtons([string]$language, $window, $work) {
   # UIA is supplementary to the physical GetWindowRect/monitor screenshot.
   # An unavailable Tk UIA tree must NEVER become a fabricated visibility PASS.
@@ -241,6 +282,7 @@ try {
   Assert ($win.Left -ge $work.Left -and $win.Top -ge $work.Top -and
           $win.Right -le $work.Right -and $win.Bottom -le $work.Bottom) 'WINDOW_OUTSIDE_WORK_AREA'
   $receipt.en_screenshot_sha256 = Capture-Monitor 'signal-sprint-en.png' $screen
+  Capture-UIATree 'en-initial' $window
   $receipt.en_buttons_in_workarea = Check-VisibleButtons 'EN' $window $work
   try {
     $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -258,6 +300,7 @@ try {
   Assert ($window.Current.Name -eq 'Signal Sprint | JP') 'JAPANESE_TOGGLE_NOT_OBSERVED'
   $receipt.jp_window_title_observed = $true
   $receipt.jp_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp.png' $screen
+  Capture-UIATree 'jp-initial' $window
   $receipt.jp_buttons_in_workarea = Check-VisibleButtons 'JP' $window $work
   Assert ($receipt.en_screenshot_sha256 -ne $receipt.jp_screenshot_sha256) 'JAPANESE_SCREEN_NO_PIXEL_CHANGE'
   $receipt.jp_window_sha256 = Capture-Window 'signal-sprint-jp-window-initial.png' $win
@@ -306,6 +349,7 @@ try {
   $receipt.exhausted_window_sha256 = Capture-Window 'signal-sprint-jp-turn-30-expected-lost.png' $exhaustedRect
   Assert ($receipt.exhausted_window_sha256 -ne $receipt.pre_exhaustion_window_sha256) 'EXHAUSTION_LAST_MOVE_NO_PIXEL_CHANGE'
   $receipt.exhaustion_pixel_change_observed = $true
+  Capture-UIATree 'jp-lost' $window
   # Tk widgets may not expose their text through UIAutomation. A changed
   # screenshot is NOT proof that the visible message actually says LOST.
   try {
