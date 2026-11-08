@@ -231,11 +231,11 @@ def launch():
         "EN": ("SIGNAL SPRINT", "Collect 3 energy cells, then reach EXIT.",
                "Arrows / WASD / click adjacent tile | J: Japanese",
                "Moves left", "Cells", "Start / Retry (R)", "Undo (U)",
-               "Save (S)", "Load (L)", "日本語 (J)"),
+               "Save (Ctrl+S)", "Load (L)", "日本語 (J)"),
         "JP": ("SIGNAL SPRINT", "3つのエネルギーを集めて出口に到達しよう。",
                "矢印 / WASD / 隣のマスをクリック | J: English",
                "残り手数", "回収", "開始 / 再挑戦 (R)", "1手戻す (U)",
-               "保存 (S)", "読込 (L)", "English (J)"),
+               "保存 (Ctrl+S)", "読込 (L)", "English (J)"),
     }
     heading = tk.Label(root, bg="#101827", fg="#e9f4ff",
                        font=("Segoe UI", 22, "bold"))
@@ -347,14 +347,17 @@ def launch():
         buttons.append(button)
 
     def key(event):
+        # Ctrl+S must be handled before WASD: plain S is movement.
+        # Tk state bit 0x0004 is Control on Windows and X11.
+        if event.keysym.lower() == "s" and (event.state & 0x0004):
+            save()
+            return "break"
         if event.keysym in DIRECTIONS:
             move(*DIRECTIONS[event.keysym])
         elif event.keysym.lower() == "r":
             restart()
         elif event.keysym.lower() == "u":
             undo()
-        elif event.keysym.lower() == "s":
-            save()
         elif event.keysym.lower() == "l":
             load()
         elif event.keysym.lower() == "j":
