@@ -287,7 +287,7 @@ def launch():
         for button, title in zip(buttons, words[5:]):
             button.config(text=title)
         if native_uia is not None:
-            native_uia.refresh(words[5:], status + "\\n" + ui_message(game.message, language[0]))
+            native_uia.refresh(words[5:], status + "\n" + ui_message(game.message, language[0]))
         canvas.delete("all")
         for y in range(SIZE):
             for x in range(SIZE):
