@@ -9,6 +9,7 @@ on:
       - codex/signal-sprint-workarea-aware-ui-20261103
       - codex/signal-sprint-uia-failclosed-20261103
       - codex/signal-sprint-uia-trigger-repair-20261108
+      - codex/signal-sprint-ctrl-s-20261109
   pull_request:
     branches:
       - codex/game-signal-sprint-undo-20261027
@@ -20,6 +21,7 @@ on:
       - codex/signal-sprint-uia-fixture-contract-20261106
       - codex/signal-sprint-uia-pr25-trigger-20261106
       - codex/signal-sprint-uia-tree-receipt-20261107
+      - codex/signal-sprint-uia-trigger-repair-20261108
 env:
   SIGNAL_SPRINT_REVISION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   SIGNAL_SPRINT_LAYOUT_TRACE: evidence/workarea-layout-trace.json
