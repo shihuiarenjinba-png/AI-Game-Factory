@@ -266,6 +266,13 @@ def launch():
     button_frame.grid_columnconfigure(1, weight=1)
     buttons = []
 
+    # Native Win32 controls expose standard UIA Button/Invoke and Text patterns.
+    # Tk's themed drawing alone is not an accessibility contract on Windows.
+    native_uia = None
+    if os.name == "nt":
+        from signal_sprint_uia_win32 import NativeUIABridge
+        native_uia = NativeUIABridge(root, message, buttons)
+
     def draw():
         words = labels[language[0]]
         root.title("Signal Sprint | " + language[0])
@@ -279,6 +286,8 @@ def launch():
                           "#ff9e9e" if game.status == "LOST" else "#fff")
         for button, title in zip(buttons, words[5:]):
             button.config(text=title)
+        if native_uia is not None:
+            native_uia.refresh(words[5:], status + "\\n" + ui_message(game.message, language[0]))
         canvas.delete("all")
         for y in range(SIZE):
             for x in range(SIZE):
@@ -443,6 +452,8 @@ def launch():
         # Never show a taskbar-obscured window as if it were verified.
         root.destroy()
 
+    if native_uia is not None:
+        native_uia.install((restart, undo, save, load, toggle))
     root.bind("<Key>", key)
     root.bind("<Configure>", adapt_board)
     canvas.bind("<Button-1>", click)
