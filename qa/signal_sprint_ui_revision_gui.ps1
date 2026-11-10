@@ -537,5 +537,7 @@ try {
 }
 if ($receipt.status -ne 'GUI_WORK_AREA_AND_JP_TOGGLE_CHECK_ONLY') { exit 2 }
 if (@($receipt.focus_evidence).Count -lt 1 -or @($receipt.focus_evidence | Where-Object { -not $_.owned_before_input }).Count -gt 0) { exit 3 }
-if ($receipt.en_buttons_in_workarea -ne 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY' -or $receipt.jp_buttons_in_workarea -ne 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY' -or $receipt.lost_text_semantics -ne 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED' -or $receipt.en_lost_text_semantics -ne 'UIAUTOMATION_EN_LOST_TEXT_OBSERVED') { exit 4 }
+if ($receipt.uia_gate_failed_checks.Count -gt 0) { exit 4 }
+# Pattern presence and focus alone do not certify actual Invoke side effects.
+# This script is GUI evidence only, never sale-ready or GDK/MSIXVC certification.
 exit 0
