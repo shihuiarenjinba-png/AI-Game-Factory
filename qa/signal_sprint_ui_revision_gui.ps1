@@ -184,6 +184,40 @@ function Check-VisibleButtons([string]$language, $window, $work) {
     return 'HOLD_UIA_BUTTONS_UNAVAILABLE'
   }
 }
+function Check-ButtonInvokeFocus([string]$language, $window) {
+  $expected = if ($language -eq 'EN') { @('Start','Retry','Restart','日本語') } else { @('再挑戦','最初から','English') }
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button)
+  $controls = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+  if ($controls.Count -lt 5) { return 'HOLD_UIA_FIVE_BUTTONS_NOT_EXPOSED' }
+  $names = @()
+  foreach ($control in $controls) {
+    if (-not $control.Current.IsEnabled -or $control.Current.IsOffscreen) { return 'HOLD_UIA_BUTTON_DISABLED_OR_OFFSCREEN' }
+    $name = [string]$control.Current.Name
+    if ([string]::IsNullOrWhiteSpace($name)) { return 'HOLD_UIA_BUTTON_NAME_EMPTY' }
+    $names += $name
+    $pattern = $null
+    if (-not $control.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+      return 'HOLD_UIA_INVOKE_PATTERN_MISSING'
+    }
+    try {
+      $control.SetFocus()
+      Start-Sleep -Milliseconds 80
+      $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+      if ($null -eq $focused -or -not $focused.Equals($control)) {
+        return 'HOLD_UIA_BUTTON_FOCUS_NOT_ACQUIRED'
+      }
+    } catch { return 'HOLD_UIA_BUTTON_FOCUS_EXCEPTION' }
+    # Do not Invoke here: Start/Retry/Language are state-mutating.
+    # A separate isolated process must verify Invoke side effects.
+  }
+  $all = $names -join ' '
+  foreach ($token in $expected) {
+    if (-not $all.Contains($token)) { return 'HOLD_UIA_BUTTON_EXPECTED_NAME_MISSING' }
+  }
+  return 'UIA_PATTERN_AND_FOCUS_OBSERVED_INVOKE_SIDE_EFFECT_UNVERIFIED'
+}
 # Native foreground-window ownership is measured immediately before every key.
 # AppActivate returning successfully is not evidence that the game owns focus.
 Add-Type -TypeDefinition @'
@@ -294,6 +328,7 @@ try {
       $receipt.control_count = $controls.Count
     }
   } catch { $receipt.ui_automation_controls = 'HOLD_UNAVAILABLE' }
+  $receipt.en_invoke_focus = Check-ButtonInvokeFocus 'EN' $window
   Press-Key 'j' $guiProcess.Id
   $script:inputLanguage = 'JP'
   $script:inputPhase = 'JP_FIRST_MOVE'
@@ -302,6 +337,7 @@ try {
   $receipt.jp_screenshot_sha256 = Capture-Monitor 'signal-sprint-jp.png' $screen
   Capture-UIATree 'jp-initial' $window
   $receipt.jp_buttons_in_workarea = Check-VisibleButtons 'JP' $window $work
+  $receipt.jp_invoke_focus = Check-ButtonInvokeFocus 'JP' $window
   Assert ($receipt.en_screenshot_sha256 -ne $receipt.jp_screenshot_sha256) 'JAPANESE_SCREEN_NO_PIXEL_CHANGE'
   $receipt.jp_window_sha256 = Capture-Window 'signal-sprint-jp-window-initial.png' $win
   Press-Key '{RIGHT}' $guiProcess.Id
@@ -482,6 +518,8 @@ try {
   # Diagnostic evidence is recorded even when the strict UIA gate fails.
   # Never turn missing controls or text into a PASS based on screenshots.
   $receipt.uia_gate_checks = [ordered]@{
+    en_invoke_focus = [ordered]@{ observed = $receipt.en_invoke_focus; pass = ($receipt.en_invoke_focus -eq 'UIA_PATTERN_AND_FOCUS_OBSERVED_INVOKE_SIDE_EFFECT_UNVERIFIED') }
+    jp_invoke_focus = [ordered]@{ observed = $receipt.jp_invoke_focus; pass = ($receipt.jp_invoke_focus -eq 'UIA_PATTERN_AND_FOCUS_OBSERVED_INVOKE_SIDE_EFFECT_UNVERIFIED') }
     en_buttons = [ordered]@{ observed = $receipt.en_buttons_in_workarea; pass = ($receipt.en_buttons_in_workarea -eq 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY') }
     jp_buttons = [ordered]@{ observed = $receipt.jp_buttons_in_workarea; pass = ($receipt.jp_buttons_in_workarea -eq 'REAL_UIA_FIVE_BUTTONS_INSIDE_WORKAREA_CHECK_ONLY') }
     jp_lost_text = [ordered]@{ observed = $receipt.lost_text_semantics; pass = ($receipt.lost_text_semantics -eq 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED') }
