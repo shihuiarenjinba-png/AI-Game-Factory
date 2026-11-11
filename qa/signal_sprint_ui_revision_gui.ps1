@@ -172,11 +172,11 @@ function Check-VisibleButtons([string]$language, $window, $work) {
     }
     $all = $names -join ' '
     if ($language -eq 'EN') {
-      if ($all -notmatch 'Start|Retry|Restart' -or $all -notmatch '\u65e5\u672c\u8a9e') {
+      if ($all -notmatch 'Start|Retry|Restart' -or $all -notmatch '日本語') {
         return 'HOLD_UIA_EN_BUTTON_LABELS_NOT_EXPOSED'
       }
     } else {
-      if ($all -notmatch '\u518d\u6311\u6226|\u6700\u521d\u304b\u3089' -or $all -notmatch 'English') {
+      if ($all -notmatch '再挑戦|最初から' -or $all -notmatch 'English') {
         return 'HOLD_UIA_JP_BUTTON_LABELS_NOT_EXPOSED'
       }
     }
@@ -397,7 +397,7 @@ try {
     foreach ($element in $allText) {
       try { if ($element.Current.Name) { $names += [string]$element.Current.Name } } catch {}
     }
-    if (($names -join ' ') -match '\u5931\u6557' -and ($names -join ' ') -match '\u624b\u6570\u304c\u306a\u304f\u306a\u308a\u307e\u3057\u305f') {
+    if (($names -join ' ') -match '失敗' -and ($names -join ' ') -match '手数がなくなりました') {
       $receipt.lost_text_semantics = 'UIAUTOMATION_JP_LOST_TEXT_OBSERVED'
     } else {
       $receipt.lost_text_semantics = 'HOLD_UIAUTOMATION_TEXT_NOT_EXPOSED'
