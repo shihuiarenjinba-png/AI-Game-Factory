@@ -76,6 +76,8 @@ class NativeUIABridge:
             raise OSError("Cannot install native UIA command dispatcher")
 
     def install(self, callbacks):
+        if len(callbacks) != 5 or len(self.tk_buttons) != 5:
+            raise ValueError("Signal Sprint requires exactly five native UIA buttons")
         self.callbacks = tuple(callbacks)
         for index in range(5):
             hwnd = self.user32.CreateWindowExW(
@@ -120,9 +122,15 @@ class NativeUIABridge:
         if self._closed or not self.controls or self.pending is None:
             return
         names, status = self.pending
+        if len(names) != 5 or any(not isinstance(name, str) or not name.strip() for name in names):
+            raise ValueError("Native UIA button names must contain five nonempty labels")
+        if not isinstance(status, str) or not status.strip():
+            raise ValueError("Native UIA status text must not be empty")
         for hwnd, widget, name in zip(
                 self.controls, self.tk_buttons, names):
-            self.user32.SetWindowTextW(hwnd, name)
+            if not self.user32.SetWindowTextW(hwnd, name):
+                raise OSError("Cannot publish native UIA button Name")
             self._place(hwnd, widget)
-        self.user32.SetWindowTextW(self.status_hwnd, status)
+        if not self.user32.SetWindowTextW(self.status_hwnd, status):
+            raise OSError("Cannot publish native UIA status Name")
         self._place(self.status_hwnd, self.status_widget)
