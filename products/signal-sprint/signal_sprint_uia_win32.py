@@ -45,11 +45,14 @@ class NativeUIABridge:
         self.user32.SetWindowPos.restype = wintypes.BOOL
         self.user32.CallWindowProcW.argtypes = [
             ptr, ptr, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-        self.user32.CallWindowProcW.restype = wintypes.LPARAM
+        # LRESULT and LONG_PTR are pointer-sized on 64-bit Windows. Using
+        # wintypes.LPARAM/c_long here truncates WNDPROC pointers on Win64.
+        lresult = ctypes.c_ssize_t
+        self.user32.CallWindowProcW.restype = lresult
         self.user32.SetWindowLongPtrW.argtypes = [ptr, ctypes.c_int, ptr]
         self.user32.SetWindowLongPtrW.restype = ptr
         callback_type = ctypes.WINFUNCTYPE(
-            wintypes.LPARAM, ptr, wintypes.UINT,
+            lresult, ptr, wintypes.UINT,
             wintypes.WPARAM, wintypes.LPARAM)
 
         def window_proc(hwnd, msg, wparam, lparam):
