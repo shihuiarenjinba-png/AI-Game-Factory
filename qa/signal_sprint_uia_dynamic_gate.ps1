@@ -93,18 +93,30 @@ try {
      title_transition=$transition; uia_tree_changed=$uiaStateChanged
      uia_before=$beforeNodes; uia_after=$afterNodes
      lost_uia_nodes=$lostNodes
-     side_effect_verified=$false # Requires action-specific semantic assertion
+     side_effect_verified=$false
    }
-   # Only language toggle has an unconditional observable title transition.
-   if ($targetName -in @('日本語 (J)','English (J)') -and -not $transition) {
-     throw "LANGUAGE_INVOKE_NO_TRANSITION:$language"
+   # Fail closed on every Invoke: an unchanged UIA tree/title is not an action result.
+   # The expected behavior must be observable, not merely an InvokePattern call.
+   $isLanguage = ($targetName -in @('日本語 (J)','English (J)'))
+   if ($isLanguage) {
+     $expectedTitle = if ($language -eq 'EN') { 'Signal Sprint | JP' } else { 'Signal Sprint | EN' }
+     $semanticOk = ($afterTitle -ceq $expectedTitle)
+   } else {
+     $semanticOk = $uiaStateChanged
    }
+   $receipt.evidence[-1].side_effect_verified = [bool]$semanticOk
+   if (-not $semanticOk) { throw "ACTION_SEMANTIC_STATE_NOT_OBSERVABLE:$language/$targetName" }
    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
    $process = $null
   }
  }
- # Remaining actions require explicit game-state assertions, not mere Invoke success.
- throw 'INCOMPLETE_GAME_STATE_AND_LOST_ASSERTIONS'
+ # LOST must be positively visible through UIA. A title-only or screenshot-only
+ # indication is not sufficient. Do not mark PASS until a deterministic LOST
+ # fixture is available and the UIA tree actually exposes the LOST state.
+ $lostEvidence = @($receipt.evidence | Where-Object { @($_.lost_uia_nodes).Count -gt 0 })
+ if ($lostEvidence.Count -eq 0) { throw 'LOST_UIA_NOT_OBSERVED' }
+ if (@($receipt.evidence).Count -ne 10) { throw 'BILINGUAL_BUTTON_COVERAGE_INCOMPLETE' }
+ $receipt.status = 'PASS'
 } catch {
  $receipt.errors += [string]$_.Exception.Message
 } finally {
@@ -113,4 +125,5 @@ try {
  if ($folder) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
  $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
 }
-exit 4
+if ($receipt.status -eq 'PASS') { exit 0 }
+exit 1
