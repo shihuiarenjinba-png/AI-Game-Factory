@@ -113,8 +113,15 @@ try {
  # LOST must be positively visible through UIA. A title-only or screenshot-only
  # indication is not sufficient. Do not mark PASS until a deterministic LOST
  # fixture is available and the UIA tree actually exposes the LOST state.
- $lostEvidence = @($receipt.evidence | Where-Object { @($_.lost_uia_nodes).Count -gt 0 })
- if ($lostEvidence.Count -eq 0) { throw 'LOST_UIA_NOT_OBSERVED' }
+ foreach ($requiredLanguage in @('EN','JP')) {
+   $lostEvidence = @($receipt.evidence | Where-Object {
+     $_.language -eq $requiredLanguage -and @($_.lost_uia_nodes).Count -gt 0
+   })
+   if ($lostEvidence.Count -eq 0) { throw "LOST_UIA_NOT_OBSERVED:$requiredLanguage" }
+ }
+ # UIA tree mutation alone is not a semantic proof of Start/Undo/Save/Load.
+ # Keep HOLD until operation-specific state assertions and deterministic LOST setup exist.
+ throw 'INCOMPLETE_OPERATION_SPECIFIC_ASSERTIONS_AND_DETERMINISTIC_LOST_FIXTURE'
  if (@($receipt.evidence).Count -ne 10) { throw 'BILINGUAL_BUTTON_COVERAGE_INCOMPLETE' }
  $receipt.status = 'PASS'
 } catch {
