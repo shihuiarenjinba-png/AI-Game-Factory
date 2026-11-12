@@ -70,16 +70,30 @@ try {
    $button.SetFocus()
    Start-Sleep -Milliseconds 100
    if (-not [System.Windows.Automation.AutomationElement]::FocusedElement.Equals($button)) { throw "FOCUS_FAILED:$targetName" }
+   # Capture UIA-visible state before invoking; title alone is not game-state evidence.
    $beforeTitle = $window.Current.Name
+   $beforeNodes = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+     [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object {
+       [string]$_.Current.ControlType.ProgrammaticName + ':' + [string]$_.Current.Name
+     })
    $pattern.Invoke()
    Start-Sleep -Milliseconds 400
    $afterTitle = $window.Current.Name
+   $afterNodes = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+     [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object {
+       [string]$_.Current.ControlType.ProgrammaticName + ':' + [string]$_.Current.Name
+     })
    $transition = ($beforeTitle -cne $afterTitle)
+   $uiaStateChanged = (($beforeNodes -join [char]0) -cne ($afterNodes -join [char]0))
+   $lostNodes = @($afterNodes | Where-Object { $_ -match '(?i)(^|[^a-z])LOST([^a-z]|$)' })
    $receipt.evidence += [ordered]@{
      language=$language; name=$targetName; control_type='ControlType.Button'
      invoke_pattern=$true; focus=$true; invoked=$true
      title_before=$beforeTitle; title_after=$afterTitle
-     title_transition=$transition; side_effect_verified=$transition
+     title_transition=$transition; uia_tree_changed=$uiaStateChanged
+     uia_before=$beforeNodes; uia_after=$afterNodes
+     lost_uia_nodes=$lostNodes
+     side_effect_verified=$false # Requires action-specific semantic assertion
    }
    # Only language toggle has an unconditional observable title transition.
    if ($targetName -in @('日本語 (J)','English (J)') -and -not $transition) {
