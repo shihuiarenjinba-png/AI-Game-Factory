@@ -73,6 +73,21 @@ try {
    }
    $matches = @($buttons.Controls | Where-Object { $_.Current.Name -ceq $targetName })
    if ($matches.Count -ne 1) { throw "BUTTON_NOT_UNIQUE:$targetName" }
+   # Start must genuinely transition from LOST, not simply redraw PLAYING.
+   if ($targetName -match '^(Start|開始)') {
+     $loadName = if ($language -eq 'EN') { 'Load (L)' } else { '読込 (L)' }
+     $loadControl = @($buttons.Controls | Where-Object { $_.Current.Name -ceq $loadName })
+     if ($loadControl.Count -ne 1) { throw 'SETUP_LOAD_CONTROL_MISSING' }
+     $loadControl[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+     Start-Sleep -Milliseconds 400
+     $preNodes = @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+       [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object {
+         [string]$_.Current.ControlType.ProgrammaticName + ':' + [string]$_.Current.Name
+       })
+     if (-not @($preNodes | Where-Object { $_ -match '^ControlType\\.Text:(LOST|失敗)(\\r?\\n|$)' }).Count) {
+       throw 'START_PRECONDITION_LOST_NOT_OBSERVED'
+     }
+   }
    $button = $matches[0]
    if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button -or
        -not $button.Current.IsEnabled -or $button.Current.IsOffscreen) { throw "BUTTON_NOT_ACCESSIBLE:$targetName" }
