@@ -84,7 +84,7 @@ try {
        [System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object {
          [string]$_.Current.ControlType.ProgrammaticName + ':' + [string]$_.Current.Name
        })
-     if (-not @($preNodes | Where-Object { $_ -match '^ControlType\\.Text:(LOST|失敗)(\\r?\\n|$)' }).Count) {
+     if (-not @($preNodes | Where-Object { $_ -match '^ControlType\.Text:(LOST|失敗)(\r?\n|$)' }).Count) {
        throw 'START_PRECONDITION_LOST_NOT_OBSERVED'
      }
    }
@@ -133,14 +133,14 @@ try {
      # Assert localized, operation-specific UIA status rather than arbitrary tree mutation.
      $statusText = @($afterNodes | Where-Object { $_ -like 'ControlType.Text:*' }) -join "`n"
      if ($targetName -match '^(Start|開始)') {
-       $semanticOk = ($statusText -match 'ControlType\\.Text:(PLAYING|プレイ中)(\\r?\\n|$)')
+       $semanticOk = ($statusText -match 'ControlType\.Text:(PLAYING|プレイ中)(\r?\n|$)')
      } elseif ($targetName -match '^(Undo|1手戻す)') {
        $semanticOk = ($statusText -match '(No move to undo|戻せる手がありません)')
      } elseif ($targetName -match '^(Save|保存)') {
        $semanticOk = ($statusText -match '(Saved on this computer|このPCに保存しました)') -and
          (Test-Path -LiteralPath (Join-Path $caseHome '.signal-sprint/save.json') -PathType Leaf)
      } elseif ($targetName -match '^(Load|読込)') {
-       $semanticOk = ($statusText -match 'ControlType\\.Text:(LOST|失敗)(\\r?\\n|$)')
+       $semanticOk = ($statusText -match 'ControlType\.Text:(LOST|失敗)(\r?\n|$)')
      } else { $semanticOk = $false }
    }
    $receipt.evidence[-1].side_effect_verified = [bool]$semanticOk
