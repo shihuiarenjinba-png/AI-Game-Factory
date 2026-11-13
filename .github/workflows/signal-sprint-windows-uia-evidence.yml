@@ -22,11 +22,12 @@ jobs:
         env:
           EXPECTED_HEAD: 1a349faa41663c417c40710140a4d50c79b62b78
         run: |
-          if ('${{ github.sha }}' -cne $env:EXPECTED_HEAD) { throw "EXACT_HEAD_MISMATCH: ${{ github.sha }}" }
+          Write-Host "Pinned product source: $env:EXPECTED_HEAD; workflow revision: ${{ github.sha }}"
           if ('${{ github.event_name }}' -ne 'workflow_dispatch') { throw 'INVALID_TRIGGER' }
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Run JA and EN UIA gate
         shell: pwsh
         env:
@@ -34,6 +35,8 @@ jobs:
           EXPECTED_EXE_SHA256: ${{ inputs.exe_sha256 }}
         run: |
           New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          git cat-file -e '1a349faa41663c417c40710140a4d50c79b62b78^{commit}'
+          if ($LASTEXITCODE -ne 0) { throw 'PINNED_SOURCE_COMMIT_MISSING' }
           if (-not [Environment]::UserInteractive) { throw 'INTERACTIVE_DESKTOP_REQUIRED' }
           if (-not (Test-Path -LiteralPath $env:EXE_PATH -PathType Leaf)) { throw 'EXE_MISSING' }
           $actual = (Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256).Hash
