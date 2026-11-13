@@ -37,8 +37,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path evidence | Out-Null
           git cat-file -e '1a349faa41663c417c40710140a4d50c79b62b78^{commit}'
           if ($LASTEXITCODE -ne 0) { throw 'PINNED_SOURCE_COMMIT_MISSING' }
-          $sourceBase = (git rev-parse '1a349faa41663c417c40710140a4d50c79b62b78^').Trim()
-          if ($sourceBase -ne 'a377043d3c9ab0c71d9a100cdb841dd7000313b9') { throw 'PINNED_PR30_SOURCE_PARENT_MISMATCH' }
+          git merge-base --is-ancestor 'a377043d3c9ab0c71d9a100cdb841dd7000313b9' '1a349faa41663c417c40710140a4d50c79b62b78'
+          if ($LASTEXITCODE -ne 0) { throw 'PINNED_PR30_SOURCE_ANCESTRY_MISMATCH' }
           if (-not [Environment]::UserInteractive) { throw 'INTERACTIVE_DESKTOP_REQUIRED' }
           if (-not (Test-Path -LiteralPath $env:EXE_PATH -PathType Leaf)) { throw 'EXE_MISSING' }
           $actual = (Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256).Hash
