@@ -19,6 +19,7 @@ $receipt = [ordered]@{
  errors = @()
 }
 $process = $null
+$oldProfile = $env:USERPROFILE
 try {
  if (-not [Environment]::UserInteractive) { throw 'NO_INTERACTIVE_WINDOWS_DESKTOP' }
  if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw 'EXE_MISSING' }
@@ -26,6 +27,15 @@ try {
  # Every action starts from an isolated process to prevent state leakage.
  foreach ($language in @('EN','JP')) {
   foreach ($targetName in $expected[$language]) {
+     # Per-case isolated user profile: the production save_path() resolves Path.home().
+   $oldProfile = $env:USERPROFILE
+   $caseHome = Join-Path ([IO.Path]::GetTempPath()) ('signal-sprint-uia-' + [guid]::NewGuid().ToString('N'))
+   New-Item -ItemType Directory -Path (Join-Path $caseHome '.signal-sprint') -Force | Out-Null
+   $fixture = @{ version=1; position=@(0,0); collected=@(); turns=30; status='LOST' }
+   if ($targetName -match '^(Start|開始|Load|読込)') {
+     $fixture | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $caseHome '.signal-sprint/save.json') -Encoding UTF8
+   }
+   $env:USERPROFILE = $caseHome
    $process = Start-Process -FilePath (Resolve-Path $ExePath).Path -WorkingDirectory (Split-Path (Resolve-Path $ExePath).Path) -PassThru
    $window = $null
    for ($attempt=0; $attempt -lt 40; $attempt++) {
@@ -105,12 +115,25 @@ try {
      $expectedTitle = if ($language -eq 'EN') { 'Signal Sprint | JP' } else { 'Signal Sprint | EN' }
      $semanticOk = ($afterTitle -ceq $expectedTitle)
    } else {
-     $semanticOk = $uiaStateChanged
+     # Assert localized, operation-specific UIA status rather than arbitrary tree mutation.
+     $statusText = @($afterNodes | Where-Object { $_ -like 'ControlType.Text:*' }) -join "`n"
+     if ($targetName -match '^(Start|開始)') {
+       $semanticOk = ($statusText -match 'ControlType\\.Text:(PLAYING|プレイ中)(\\r?\\n|$)')
+     } elseif ($targetName -match '^(Undo|1手戻す)') {
+       $semanticOk = ($statusText -match '(No move to undo|戻せる手がありません)')
+     } elseif ($targetName -match '^(Save|保存)') {
+       $semanticOk = ($statusText -match '(Saved on this computer|このPCに保存しました)') -and
+         (Test-Path -LiteralPath (Join-Path $caseHome '.signal-sprint/save.json') -PathType Leaf)
+     } elseif ($targetName -match '^(Load|読込)') {
+       $semanticOk = ($statusText -match 'ControlType\\.Text:(LOST|失敗)(\\r?\\n|$)')
+     } else { $semanticOk = $false }
    }
    $receipt.evidence[-1].side_effect_verified = [bool]$semanticOk
    if (-not $semanticOk) { throw "ACTION_SEMANTIC_STATE_NOT_OBSERVABLE:$language/$targetName" }
    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
    $process = $null
+   $env:USERPROFILE = $oldProfile
+   Remove-Item -LiteralPath $caseHome -Recurse -Force -ErrorAction SilentlyContinue
   }
  }
  # LOST must be positively visible through UIA. A title-only or screenshot-only
@@ -122,12 +145,10 @@ try {
    })
    if ($lostEvidence.Count -eq 0) { throw "LOST_UIA_NOT_OBSERVED:$requiredLanguage" }
  }
- # UIA tree mutation alone is not a semantic proof of Start/Undo/Save/Load.
- # Keep HOLD until operation-specific state assertions and deterministic LOST setup exist.
- throw 'INCOMPLETE_OPERATION_SPECIFIC_ASSERTIONS_AND_DETERMINISTIC_LOST_FIXTURE'
  if (@($receipt.evidence).Count -ne 10) { throw 'BILINGUAL_BUTTON_COVERAGE_INCOMPLETE' }
  $receipt.status = 'PASS'
 } catch {
+ if ($null -ne $oldProfile) { $env:USERPROFILE = $oldProfile }
  $receipt.errors += [string]$_.Exception.Message
 } finally {
  if ($null -ne $process) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
