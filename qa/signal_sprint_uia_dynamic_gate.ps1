@@ -85,7 +85,10 @@ try {
      })
    $transition = ($beforeTitle -cne $afterTitle)
    $uiaStateChanged = (($beforeNodes -join [char]0) -cne ($afterNodes -join [char]0))
-   $lostNodes = @($afterNodes | Where-Object { $_ -match '(?i)(^|[^a-z])LOST([^a-z]|$)' })
+   $lostNodes = @($afterNodes | Where-Object {
+     # Native STATIC status is localized: EN=LOST, JP=失敗.
+     $_ -match '^ControlType\.Text:(?:LOST|失敗)(?:\r?\n|$)'
+   })
    $receipt.evidence += [ordered]@{
      language=$language; name=$targetName; control_type='ControlType.Button'
      invoke_pattern=$true; focus=$true; invoked=$true
