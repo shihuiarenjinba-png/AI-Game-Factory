@@ -1,0 +1,73 @@
+name: Signal Sprint Windows UIA evidence (GDK only)
+on:
+  workflow_dispatch:
+    inputs:
+      exe_path:
+        description: Absolute path to independently built Signal Sprint EXE on interactive Windows runner
+        required: true
+        type: string
+      exe_sha256:
+        description: Independently attested SHA256 of EXE
+        required: true
+        type: string
+      build_receipt_path:
+        description: Absolute path to independently produced JSON build receipt (source_commit, exe_sha256, build_run_url)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  bilingual-uia:
+    if: github.ref == 'refs/heads/codex/signal-sprint-uia-fixture-20261110'
+    runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: d9b4c3d6cf1d454d116f2a56d8923ddf9a7ae21f
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Preflight exact checkout and EXE provenance
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+          EXPECTED_EXE_SHA256: ${{ inputs.exe_sha256 }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          $head = (git rev-parse HEAD).Trim()
+          $expectedHead = 'd9b4c3d6cf1d454d116f2a56d8923ddf9a7ae21f'
+          $productSource = '1a349faa41663c417c40710140a4d50c79b62b78'
+          $pr30 = 'a377043d3c9ab0c71d9a100cdb841dd7000313b9'
+          if ($head -cne $expectedHead) { throw "CHECKOUT_HEAD_MISMATCH: $head" }
+          git merge-base --is-ancestor $pr30 $productSource
+          if ($LASTEXITCODE -ne 0) { throw 'PR30_SOURCE_ANCESTRY_MISMATCH' }
+          git merge-base --is-ancestor $productSource $head
+          if ($LASTEXITCODE -ne 0) { throw 'PRODUCT_SOURCE_NOT_IN_UIA_HEAD' }
+          if (-not [Environment]::UserInteractive) { throw 'INTERACTIVE_DESKTOP_REQUIRED' }
+          if (-not [IO.Path]::IsPathFullyQualified($env:EXE_PATH) -or -not (Test-Path -LiteralPath $env:EXE_PATH -PathType Leaf)) { throw 'EXE_MISSING_OR_NOT_ABSOLUTE' }
+          if ($env:EXPECTED_EXE_SHA256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'INVALID_EXPECTED_EXE_SHA256' }
+          $actual = (Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256).Hash
+          if ($actual -ine $env:EXPECTED_EXE_SHA256) { throw 'EXE_SHA256_MISMATCH' }
+          if (-not [IO.Path]::IsPathFullyQualified($env:BUILD_RECEIPT_PATH) -or -not (Test-Path -LiteralPath $env:BUILD_RECEIPT_PATH -PathType Leaf)) { throw 'BUILD_RECEIPT_MISSING' }
+          $receipt = Get-Content -LiteralPath $env:BUILD_RECEIPT_PATH -Raw | ConvertFrom-Json
+          if ($receipt.source_commit -cne $productSource) { throw 'BUILD_SOURCE_MISMATCH' }
+          if ($receipt.exe_sha256 -ine $actual) { throw 'BUILD_RECEIPT_EXE_SHA_MISMATCH' }
+          if ([string]::IsNullOrWhiteSpace($receipt.build_run_url)) { throw 'BUILD_RUN_PROVENANCE_MISSING' }
+          [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
