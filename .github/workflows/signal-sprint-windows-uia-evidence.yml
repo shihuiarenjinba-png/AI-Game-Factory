@@ -26,6 +26,7 @@ jobs:
           if ('${{ github.event_name }}' -ne 'workflow_dispatch') { throw 'INVALID_TRIGGER' }
       - uses: actions/checkout@v4
         with:
+          ref: 1a349faa41663c417c40710140a4d50c79b62b78
           persist-credentials: false
           fetch-depth: 0
       - name: Run JA and EN UIA gate
@@ -35,6 +36,8 @@ jobs:
           EXPECTED_EXE_SHA256: ${{ inputs.exe_sha256 }}
         run: |
           New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          $actualHead = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actualHead -cne '1a349faa41663c417c40710140a4d50c79b62b78') { throw "CHECKOUT_HEAD_MISMATCH: $actualHead" }
           git cat-file -e '1a349faa41663c417c40710140a4d50c79b62b78^{commit}'
           if ($LASTEXITCODE -ne 0) { throw 'PINNED_SOURCE_COMMIT_MISSING' }
           git merge-base --is-ancestor 'a377043d3c9ab0c71d9a100cdb841dd7000313b9' '1a349faa41663c417c40710140a4d50c79b62b78'
@@ -42,7 +45,20 @@ jobs:
           if (-not [Environment]::UserInteractive) { throw 'INTERACTIVE_DESKTOP_REQUIRED' }
           if (-not (Test-Path -LiteralPath $env:EXE_PATH -PathType Leaf)) { throw 'EXE_MISSING' }
           $actual = (Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256).Hash
+          if ($env:EXPECTED_EXE_SHA256 -notmatch '^[0-9a-fA-F]{64}
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Upload UIA receipt even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+) { throw 'INVALID_EXPECTED_EXE_SHA256' }
           if ($actual -ine $env:EXPECTED_EXE_SHA256) { throw 'EXE_SHA256_MISMATCH' }
+          [pscustomobject]@{ source_commit=$actualHead; pr30_base='a377043d3c9ab0c71d9a100cdb841dd7000313b9'; exe_sha256=$actual; exe_path=$env:EXE_PATH; provenance='UNVERIFIED_BUILD_ORIGIN'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
           & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
           if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
       - name: Upload UIA receipt even on failure
