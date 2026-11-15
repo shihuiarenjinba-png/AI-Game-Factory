@@ -20,7 +20,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$GITHUB_REF" = "refs/heads/codex/signal-sprint-uia-fixture-20261110"
       - name: Verify positive and negative evidence fixtures
-        run: python3 -m unittest -v qa/test_signal_sprint_evidence_contract.py 2>&1 | tee fixture-results.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v qa/test_signal_sprint_evidence_contract.py 2>&1 | tee fixture-results.txt
       - name: Record source and fixture run identity
         if: always()
         shell: bash
