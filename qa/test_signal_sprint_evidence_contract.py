@@ -69,6 +69,35 @@ class ContractFixtures(unittest.TestCase):
     def test_uia_positive_contract_only(self):
         self.assertTrue(verify_uia(self.uia))
 
+    def test_build_rejects_invalid_expected_sha(self):
+        for invalid in ("", "0" * 63, "g" * 64):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError, "INVALID_EXPECTED_EXE_SHA256"
+            ):
+                verify_build(self.exe, self.build, invalid)
+
+    def test_uia_rejects_false_pass_and_duplicate_buttons(self):
+        import copy
+        failed = copy.deepcopy(self.uia)
+        failed["status"] = "HOLD"
+        with self.assertRaisesRegex(ValueError, "UIA_STATUS_NOT_PASS"):
+            verify_uia(failed)
+        duplicate = copy.deepcopy(self.uia)
+        en_rows = [row for row in duplicate["evidence"] if row["language"] == "EN"]
+        en_rows[0]["name"] = en_rows[1]["name"]
+        with self.assertRaisesRegex(ValueError, "BUTTON_EXACT_SET_MISMATCH:EN"):
+            verify_uia(duplicate)
+
+    def test_uia_rejects_missing_invoke_pattern_or_focus(self):
+        import copy
+        for key in ("invoke_pattern", "focus"):
+            bad = copy.deepcopy(self.uia)
+            bad["evidence"][0][key] = False
+            with self.subTest(field=key), self.assertRaisesRegex(
+                ValueError, "ACTION_NOT_VERIFIED"
+            ):
+                verify_uia(bad)
+
     def test_uia_negative(self):
         import copy
         for mutation in ("missing", "no_lost", "no_effect", "no_invoke"):
