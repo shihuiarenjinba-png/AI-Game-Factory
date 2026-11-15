@@ -1,7 +1,9 @@
 """Cloud-safe negative fixtures for Signal Sprint evidence contracts; NOT GUI proof."""
 import hashlib
 import json
+import re
 import unittest
+from urllib.parse import urlsplit
 
 SOURCE = "1a349faa41663c417c40710140a4d50c79b62b78"
 PR30 = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
@@ -20,8 +22,15 @@ def verify_build(exe: bytes, receipt: dict, expected_sha: str):
         raise ValueError("BUILD_SOURCE_MISMATCH")
     if receipt.get("exe_sha256", "").lower() != actual:
         raise ValueError("BUILD_RECEIPT_EXE_SHA_MISMATCH")
-    if not receipt.get("build_run_url"):
+    url = receipt.get("build_run_url")
+    if not isinstance(url, str) or not url.strip():
         raise ValueError("BUILD_RUN_PROVENANCE_MISSING")
+    parsed = urlsplit(url)
+    if (parsed.scheme != "https" or parsed.hostname != "github.com"
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port is not None or parsed.query or parsed.fragment
+            or not re.fullmatch(r"/shihuiarenjinba-png/AI-Game-Factory/actions/runs/[1-9][0-9]*", parsed.path)):
+        raise ValueError("BUILD_RUN_URL_INVALID_OR_UNTRUSTED")
     return "RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED"
 
 def verify_uia(receipt: dict):
@@ -47,7 +56,7 @@ class ContractFixtures(unittest.TestCase):
         self.exe = b"fixture-exe-bytes-not-a-real-executable"
         self.sha = hashlib.sha256(self.exe).hexdigest()
         self.build = dict(source_commit=SOURCE, exe_sha256=self.sha,
-                          build_run_url="https://github.com/example/actions/runs/1")
+                          build_run_url="https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/12345")
         self.uia = dict(status="PASS", evidence=[
             dict(language=lang, name=name, invoked=True, side_effect_verified=True,
                  invoke_pattern=True, focus=True,
@@ -65,6 +74,15 @@ class ContractFixtures(unittest.TestCase):
                 verify_build(self.exe, {**self.build, **change}, self.sha)
         with self.assertRaisesRegex(ValueError, "EXE_SHA256_MISMATCH"):
             verify_build(self.exe + b"changed", self.build, self.sha)
+
+    def test_build_rejects_untrusted_run_urls(self):
+        for url in ("http://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/12345",
+                    "https://github.com.evil.test/shihuiarenjinba-png/AI-Game-Factory/actions/runs/12345",
+                    "https://github.com/other/AI-Game-Factory/actions/runs/12345",
+                    "https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/12345?fake=1",
+                    "https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/0"):
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, "BUILD_RUN_URL_INVALID_OR_UNTRUSTED"):
+                verify_build(self.exe, {**self.build, "build_run_url": url}, self.sha)
 
     def test_uia_positive_contract_only(self):
         self.assertTrue(verify_uia(self.uia))
