@@ -1,5 +1,10 @@
 name: Signal Sprint Windows UIA evidence (GDK only)
 on:
+  push:
+    branches: [codex/signal-sprint-uia-fixture-20261110]
+    paths:
+      - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
   workflow_dispatch:
     inputs:
       expected_head:
@@ -21,8 +26,25 @@ on:
 permissions:
   contents: read
 jobs:
+  cloud-provenance-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run synthetic provenance and JA/EN static contract checks
+        run: python3 qa/signal_sprint_cloud_provenance_fixture.py
+      - name: Upload cloud fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-cloud-provenance-fixture
+          path: evidence/cloud-provenance-fixture.json
+          if-no-files-found: error
+          retention-days: 30
   bilingual-uia:
-    if: github.ref == 'refs/heads/codex/signal-sprint-uia-fixture-20261110'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/signal-sprint-uia-fixture-20261110'
     runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
     timeout-minutes: 25
     steps:
