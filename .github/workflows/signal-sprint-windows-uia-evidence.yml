@@ -72,6 +72,19 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          # Emit a machine-readable failure receipt even if preflight aborts early.
+          trap {
+            $failure = [pscustomobject]@{
+              schema = 'signal-sprint-preflight-v2'
+              status = 'FAIL'
+              error = [string]$_.Exception.Message
+              provenance = 'NOT_INDEPENDENTLY_VERIFIED'
+              gui = 'NOT_TESTED'
+            }
+            $failure | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath evidence/preflight-receipt.json -Encoding utf8
+            Write-Error ('PREFLIGHT_FAILED: ' + [string]$_.Exception.Message) -ErrorAction Continue
+            exit 1
+          }
           $head = (git rev-parse HEAD).Trim()
           $expectedHead = [string]$env:EXPECTED_HEAD
           if ($expectedHead -cnotmatch '^[a-f0-9]{40}$') { throw 'EXPECTED_HEAD_INVALID' }
