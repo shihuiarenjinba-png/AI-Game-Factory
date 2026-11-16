@@ -52,10 +52,19 @@ def main():
         kwargs = {"receipt": receipt, "exe": exe, "expected_sha": digest, "expected_source": SOURCE}
         kwargs.update(update)
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
+    # Check the real UIA gate source, not only self-declared fixture constants.
+    gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
     for language in ("EN", "JP"):
         assert len(BUTTONS[language]) == len(set(BUTTONS[language])) == 5
-        assert LOST[language]
-        results.append({"case": language + " 5-button/LOST static contract", "result": "PASS_STATIC_ONLY"})
+        for name in BUTTONS[language]:
+            assert "'" + name + "'" in gate, "UIA_BUTTON_CONTRACT_MISSING:" + language + ":" + name
+        assert LOST[language] in gate, "UIA_LOST_LABEL_MISSING:" + language
+        results.append({"case": language + " 5-button/LOST source contract", "result": "PASS_STATIC_ONLY"})
+    for assertion in ("BILINGUAL_BUTTON_COVERAGE_INCOMPLETE", "LOST_UIA_NOT_OBSERVED",
+                      "ACTION_SEMANTIC_STATE_NOT_OBSERVABLE", "side_effect_verified",
+                      "GetCurrentPattern", "Invoke()", "lost_uia_nodes"):
+        assert assertion in gate, "UIA_ASSERTION_MISSING:" + assertion
+    results.append({"case": "dynamic UIA semantic assertions present", "result": "PASS_STATIC_ONLY"})
     out = pathlib.Path("evidence")
     out.mkdir(exist_ok=True)
     (out / "cloud-provenance-fixture.json").write_text(json.dumps({
