@@ -55,6 +55,49 @@ jobs:
           if ($receipt.source_commit -cne $productSource) { throw 'BUILD_SOURCE_MISMATCH' }
           if ($receipt.exe_sha256 -ine $actual) { throw 'BUILD_RECEIPT_EXE_SHA_MISMATCH' }
           if ([string]::IsNullOrWhiteSpace($receipt.build_run_url)) { throw 'BUILD_RUN_PROVENANCE_MISSING' }
+          $buildRunUrl = [string]$receipt.build_run_url
+          $uri = $null
+          if (-not [Uri]::TryCreate($buildRunUrl, [UriKind]::Absolute, [ref]$uri) -or
+              $uri.Scheme -cne 'https' -or $uri.Host -cne 'github.com' -or
+              -not $uri.IsDefaultPort -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
+              $uri.AbsolutePath -cnotmatch '^/shihuiarenjinba-png/AI-Game-Factory/actions/runs/[1-9][0-9]*
+          [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+ -or
+              $buildRunUrl -cnotmatch '^https://github[.]com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/[1-9][0-9]*
+          [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+) {
+            throw 'BUILD_RUN_URL_INVALID_OR_UNTRUSTED'
+          }
           [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
       - name: Run JA and EN UIA gate
         shell: pwsh
