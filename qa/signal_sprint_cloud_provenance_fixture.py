@@ -3,7 +3,8 @@ import hashlib
 import json
 import pathlib
 import re
-import tempfile
+import sys
+import traceback
 from urllib.parse import urlsplit
 
 REPO = "shihuiarenjinba-png/AI-Game-Factory"
@@ -34,11 +35,11 @@ def negative(label, fn):
         return {"case": label, "result": "PASS_REJECTED"}
     raise AssertionError("NEGATIVE_ACCEPTED:" + label)
 
-def main():
+def run_checks(results):
     exe = b"synthetic-fixture-only-not-a-shipping-executable"
     digest = hashlib.sha256(exe).hexdigest()
     receipt = {"source_commit": SOURCE, "exe_sha256": digest, "build_run_url": f"https://github.com/{REPO}/actions/runs/123456"}
-    results = [{"case": "matching synthetic receipt", "result": "PASS_SYNTHETIC", "sha256": validate(receipt, exe, digest, SOURCE)}]
+    results.append({"case": "matching synthetic receipt", "result": "PASS_SYNTHETIC", "sha256": validate(receipt, exe, digest, SOURCE)})
     for name, update in [
         ("tampered exe", {"exe": exe + b"x"}),
         ("wrong expected SHA", {"expected_sha": "0" * 64}),
@@ -65,15 +66,30 @@ def main():
                       "GetCurrentPattern", "Invoke()", "lost_uia_nodes"):
         assert assertion in gate, "UIA_ASSERTION_MISSING:" + assertion
     results.append({"case": "dynamic UIA semantic assertions present", "result": "PASS_STATIC_ONLY"})
-    out = pathlib.Path("evidence")
-    out.mkdir(exist_ok=True)
-    (out / "cloud-provenance-fixture.json").write_text(json.dumps({
-        "schema": "signal-sprint-cloud-fixture-v1",
-        "product_source": SOURCE, "reference_win_lose_head": HEAD,
-        "independent_build_verified": False, "physical_gui_verified": False,
-        "results": results
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("Cloud fixture:", len(results), "assertions; NOT physical GUI or independent build proof")
+def main():
+    results = []
+    status = "FAIL"
+    failure = None
+    try:
+        run_checks(results)
+        status = "PASS"
+    except Exception as exc:
+        failure = {"type": type(exc).__name__, "message": str(exc),
+                   "traceback": traceback.format_exc(limit=8)}
+    finally:
+        out = pathlib.Path("evidence")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "cloud-provenance-fixture.json").write_text(json.dumps({
+            "schema": "signal-sprint-cloud-fixture-v2",
+            "status": status, "failure": failure,
+            "product_source": SOURCE, "reference_win_lose_head": HEAD,
+            "independent_build_verified": False, "physical_gui_verified": False,
+            "results": results
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("Cloud fixture:", status, len(results), "checks; NOT physical GUI or independent build proof")
+    if failure:
+        print(failure["traceback"], file=sys.stderr)
+        raise SystemExit(1)
 
 if __name__ == "__main__":
     main()
