@@ -21,8 +21,11 @@ def validate(receipt, exe, expected_sha, expected_source):
     digest = hashlib.sha256(exe).hexdigest()
     assert re.fullmatch(r"[a-f0-9]{64}", expected_sha), "expected SHA format"
     assert digest == expected_sha, "EXE_SHA_MISMATCH"
+    assert isinstance(receipt.get("exe_sha256"), str) and re.fullmatch(r"[a-fA-F0-9]{64}", receipt["exe_sha256"]), "RECEIPT_SHA_INVALID"
     assert receipt["exe_sha256"].lower() == digest, "RECEIPT_SHA_MISMATCH"
+    assert isinstance(receipt.get("source_commit"), str) and re.fullmatch(r"[a-f0-9]{40}", receipt["source_commit"]), "RECEIPT_SOURCE_INVALID"
     assert receipt["source_commit"] == expected_source, "SOURCE_MISMATCH"
+    assert isinstance(receipt.get("build_run_url"), str) and receipt["build_run_url"], "BUILD_RUN_URL_INVALID"
     url = urlsplit(receipt["build_run_url"])
     assert (url.scheme, url.hostname, url.port, url.username, url.password) == ("https", "github.com", None, None, None), "UNTRUSTED_URL"
     assert not url.query and not url.fragment, "URL_EXTRAS"
@@ -52,6 +55,10 @@ def run_checks(results):
         ("tampered exe", {"exe": exe + b"x"}),
         ("wrong expected SHA", {"expected_sha": "0" * 64}),
         ("wrong receipt SHA", {"receipt": {**receipt, "exe_sha256": "0" * 64}}),
+        ("short receipt SHA", {"receipt": {**receipt, "exe_sha256": "abc"}}),
+        ("nonstring receipt SHA", {"receipt": {**receipt, "exe_sha256": None}}),
+        ("nonstring source", {"receipt": {**receipt, "source_commit": None}}),
+        ("nonstring build URL", {"receipt": {**receipt, "build_run_url": None}}),
         ("wrong source", {"receipt": {**receipt, "source_commit": HEAD}}),
         ("spoofed host", {"receipt": {**receipt, "build_run_url": f"https://github.com.evil.test/{REPO}/actions/runs/123456"}}),
         ("wrong repository", {"receipt": {**receipt, "build_run_url": "https://github.com/other/repo/actions/runs/123456"}}),
