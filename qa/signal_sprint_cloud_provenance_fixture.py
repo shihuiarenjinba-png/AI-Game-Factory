@@ -54,6 +54,10 @@ def run_checks(results):
         ("userinfo spoof", {"receipt": {**receipt, "build_run_url": f"https://attacker@github.com/{REPO}/actions/runs/123456"}}),
         ("fragment suffix", {"receipt": {**receipt, "build_run_url": receipt["build_run_url"] + "#artifact"}}),
         ("malformed expected sha", {"expected_sha": "not-a-sha"}),
+        ("missing build run url", {"receipt": {"source_commit": SOURCE, "exe_sha256": digest}}),
+        ("empty build run url", {"receipt": {**receipt, "build_run_url": ""}}),
+        ("missing source commit", {"receipt": {"exe_sha256": digest, "build_run_url": receipt["build_run_url"]}}),
+        ("trailing slash", {"receipt": {**receipt, "build_run_url": receipt["build_run_url"] + "/"}}),
     ]:
         kwargs = {"receipt": receipt, "exe": exe, "expected_sha": digest, "expected_source": SOURCE}
         kwargs.update(update)
