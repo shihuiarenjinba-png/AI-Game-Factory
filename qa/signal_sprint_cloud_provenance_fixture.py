@@ -1,5 +1,6 @@
 """Cloud-only negative/positive provenance contract fixture; never certifies a real EXE or GUI."""
 import hashlib
+import os
 import json
 import pathlib
 import re
@@ -94,6 +95,12 @@ def main():
     status = "FAIL"
     failure = None
     try:
+        expected_head = os.environ.get("EXPECTED_HEAD")
+        if expected_head is not None:
+            assert re.fullmatch(r"[a-f0-9]{40}", expected_head), "WORKFLOW_HEAD_INVALID"
+        actions_run_id = os.environ.get("ACTIONS_RUN_ID")
+        if actions_run_id is not None:
+            assert re.fullmatch(r"[1-9][0-9]*", actions_run_id), "ACTIONS_RUN_ID_INVALID"
         run_checks(results)
         status = "PASS"
     except Exception as exc:
@@ -103,6 +110,10 @@ def main():
         out = pathlib.Path("evidence")
         out.mkdir(parents=True, exist_ok=True)
         (out / "cloud-provenance-fixture.json").write_text(json.dumps({
+            "workflow_head": os.environ.get("EXPECTED_HEAD"),
+            "actions_run_id": os.environ.get("ACTIONS_RUN_ID"),
+            "fixture_source_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+            "uia_gate_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_bytes()).hexdigest(),
             "schema": "signal-sprint-cloud-fixture-v2",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
