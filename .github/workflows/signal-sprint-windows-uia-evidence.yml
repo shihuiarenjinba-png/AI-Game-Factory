@@ -38,6 +38,9 @@ jobs:
           EXPECTED_HEAD: ${{ github.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD" || { echo 'CLOUD_EXACT_HEAD_MISMATCH'; exit 1; }
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            test "${{ inputs.expected_head }}" = "$EXPECTED_HEAD" || { echo 'DISPATCH_EXPECTED_HEAD_MISMATCH'; exit 1; }
+          fi
       - name: Run synthetic provenance and JA/EN static contract checks
         env:
           EXPECTED_HEAD: ${{ github.sha }}
