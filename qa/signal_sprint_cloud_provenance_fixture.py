@@ -96,6 +96,24 @@ def run_checks(results):
     assert "self-hosted, Windows, interactive-desktop, signal-sprint-gdk" in windows_job, "GDK_RUNNER_CONTRACT_DRIFT"
     assert "qa/signal_sprint_uia_dynamic_gate.ps1" in windows_job, "WINDOWS_UIA_GATE_NOT_EXECUTED"
     assert "if: always()" in windows_job, "WINDOWS_FAILURE_EVIDENCE_NOT_GUARANTEED"
+    # A green synthetic fixture must not hide removal of real Windows provenance guards.
+    required_preflight = {
+        "exact dispatch HEAD": "DISPATCH_HEAD_MISMATCH",
+        "checkout HEAD": "CHECKOUT_HEAD_MISMATCH",
+        "EXE file hash": "Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256",
+        "EXE expected hash": "EXE_SHA256_MISMATCH",
+        "build receipt file": "BUILD_RECEIPT_MISSING",
+        "build receipt source": "BUILD_SOURCE_MISMATCH",
+        "build receipt EXE hash": "BUILD_RECEIPT_EXE_SHA_MISMATCH",
+        "trusted build run": "BUILD_RUN_URL_INVALID_OR_UNTRUSTED",
+        "independent build disclaimer": "RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED",
+        "physical GUI disclaimer": "NOT_YET_TESTED",
+    }
+    for label, token in required_preflight.items():
+        assert token in windows_job, "WINDOWS_PREFLIGHT_GUARD_MISSING:" + label
+        results.append({"case": "Windows preflight guard " + label, "result": "PASS_STATIC_ONLY"})
+    assert "if: github.event_name == 'workflow_dispatch'" in windows_job, "UIA_MUST_REQUIRE_DISPATCH"
+    assert "if-no-files-found: warn" in windows_job, "WINDOWS_FAILURE_EVIDENCE_POLICY_DRIFT"
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     # Check the real UIA gate source, not only self-declared fixture constants.
     gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
