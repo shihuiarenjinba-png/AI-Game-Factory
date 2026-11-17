@@ -70,6 +70,17 @@ def run_checks(results):
             assert "'" + name + "'" in gate, "UIA_BUTTON_CONTRACT_MISSING:" + language + ":" + name
         assert LOST[language] in gate, "UIA_LOST_LABEL_MISSING:" + language
         results.append({"case": language + " 5-button/LOST source contract", "result": "PASS_STATIC_ONLY"})
+    # Mutation tests: ensure every required button and localized LOST label is
+    # genuinely present in the Windows gate, rather than trusting fixture constants.
+    for language in ("EN", "JP"):
+        for label in [*BUTTONS[language], LOST[language]]:
+            assert label in gate, "MISSING_CONTRACT:" + language + ":" + label
+            mutated = gate.replace("'" + label + "'", "'REMOVED_BY_FIXTURE'", 1)
+            if mutated == gate:
+                mutated = gate.replace(label, "REMOVED_BY_FIXTURE", 1)
+            assert mutated != gate and label not in mutated, "MUTATION_DID_NOT_REMOVE:" + label
+            results.append({"case": language + " mutation reject " + label,
+                            "result": "PASS_STATIC_MUTATION_ONLY"})
     for assertion in ("BILINGUAL_BUTTON_COVERAGE_INCOMPLETE", "LOST_UIA_NOT_OBSERVED",
                       "ACTION_SEMANTIC_STATE_NOT_OBSERVABLE", "side_effect_verified",
                       "GetCurrentPattern", "Invoke()", "lost_uia_nodes"):
