@@ -78,6 +78,17 @@ def run_checks(results):
     assert "$productSource = '" + SOURCE + "'" in workflow, "WORKFLOW_PRODUCT_SOURCE_DRIFT"
     assert "signal-sprint-cloud-provenance-fixture" in workflow, "CLOUD_ARTIFACT_UPLOAD_MISSING"
     assert "signal-sprint-uia-receipt" in workflow, "WINDOWS_ARTIFACT_UPLOAD_MISSING"
+    # Assert evidence upload semantics, not merely artifact-name strings.
+    cloud_job = workflow.split("  cloud-provenance-fixture:", 1)[1].split("  bilingual-uia:", 1)[0]
+    windows_job = workflow.split("  bilingual-uia:", 1)[1]
+    assert "runs-on: ubuntu-latest" in cloud_job, "CLOUD_JOB_NOT_HOSTED"
+    assert "python3 qa/signal_sprint_cloud_provenance_fixture.py" in cloud_job, "CLOUD_FIXTURE_NOT_EXECUTED"
+    assert "if: always()" in cloud_job, "CLOUD_FAILURE_EVIDENCE_NOT_GUARANTEED"
+    assert "if-no-files-found: error" in cloud_job, "CLOUD_MISSING_EVIDENCE_NOT_FATAL"
+    assert "path: evidence/cloud-provenance-fixture.json" in cloud_job, "CLOUD_EVIDENCE_PATH_DRIFT"
+    assert "self-hosted, Windows, interactive-desktop, signal-sprint-gdk" in windows_job, "GDK_RUNNER_CONTRACT_DRIFT"
+    assert "qa/signal_sprint_uia_dynamic_gate.ps1" in windows_job, "WINDOWS_UIA_GATE_NOT_EXECUTED"
+    assert "if: always()" in windows_job, "WINDOWS_FAILURE_EVIDENCE_NOT_GUARANTEED"
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     # Check the real UIA gate source, not only self-declared fixture constants.
     gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
