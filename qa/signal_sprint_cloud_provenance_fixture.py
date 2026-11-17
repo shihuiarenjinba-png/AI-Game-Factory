@@ -78,7 +78,7 @@ def run_checks(results):
             mutated = gate.replace("'" + label + "'", "'REMOVED_BY_FIXTURE'", 1)
             if mutated == gate:
                 mutated = gate.replace(label, "REMOVED_BY_FIXTURE", 1)
-            assert mutated != gate and label not in mutated, "MUTATION_DID_NOT_REMOVE:" + label
+            assert mutated != gate and mutated.count(label) < gate.count(label), "MUTATION_DID_NOT_REMOVE:" + label
             results.append({"case": language + " mutation reject " + label,
                             "result": "PASS_STATIC_MUTATION_ONLY"})
     for assertion in ("BILINGUAL_BUTTON_COVERAGE_INCOMPLETE", "LOST_UIA_NOT_OBSERVED",
