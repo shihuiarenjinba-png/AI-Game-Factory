@@ -105,6 +105,7 @@ jobs:
           $actual = (Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256).Hash
           if ($actual -ine $env:EXPECTED_EXE_SHA256) { throw 'EXE_SHA256_MISMATCH' }
           if (-not [IO.Path]::IsPathFullyQualified($env:BUILD_RECEIPT_PATH) -or -not (Test-Path -LiteralPath $env:BUILD_RECEIPT_PATH -PathType Leaf)) { throw 'BUILD_RECEIPT_MISSING' }
+          $receiptFileSha = (Get-FileHash -LiteralPath $env:BUILD_RECEIPT_PATH -Algorithm SHA256).Hash
           $receipt = Get-Content -LiteralPath $env:BUILD_RECEIPT_PATH -Raw | ConvertFrom-Json
           if ($receipt.source_commit -cne $productSource) { throw 'BUILD_SOURCE_MISMATCH' }
           if ($receipt.exe_sha256 -ine $actual) { throw 'BUILD_RECEIPT_EXE_SHA_MISMATCH' }
@@ -117,7 +118,7 @@ jobs:
               $uri.AbsolutePath -cnotmatch '^/shihuiarenjinba-png/AI-Game-Factory/actions/runs/[1-9][0-9]*$') {
             throw 'BUILD_RUN_URL_INVALID_OR_UNTRUSTED'
           }
-          [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+          [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_receipt_sha256=$receiptFileSha; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
       - name: Run JA and EN UIA gate
         shell: pwsh
         env:
