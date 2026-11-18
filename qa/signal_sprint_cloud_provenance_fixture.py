@@ -108,6 +108,8 @@ def run_checks(results):
         "EXE file hash": "Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256",
         "EXE expected hash": "EXE_SHA256_MISMATCH",
         "build receipt file": "BUILD_RECEIPT_MISSING",
+        "receipt file SHA calculation": "Get-FileHash -LiteralPath $env:BUILD_RECEIPT_PATH -Algorithm SHA256",
+        "receipt SHA evidence field": "build_receipt_sha256=$receiptFileSha",
         "build receipt source": "BUILD_SOURCE_MISMATCH",
         "build receipt EXE hash": "BUILD_RECEIPT_EXE_SHA_MISMATCH",
         "trusted build run": "BUILD_RUN_URL_INVALID_OR_UNTRUSTED",
