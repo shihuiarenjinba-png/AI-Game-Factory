@@ -162,6 +162,9 @@ def main():
             "schema": "signal-sprint-cloud-fixture-v2",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
+            "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
+            "functional_gate": "HOLD_REAL_WINDOWS_UIA",
+            "delivery_gate": "HOLD_GDK_PACKAGE",
             "independent_build_verified": False, "physical_gui_verified": False,
             "results": results
         }, ensure_ascii=False, indent=2), encoding="utf-8")
