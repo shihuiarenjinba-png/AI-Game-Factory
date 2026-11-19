@@ -130,7 +130,9 @@ def run_checks(results):
         "per-language semantic side effects": "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE",
         "exact button set and duplicate rejection": "UIA_BUTTON_EXACT_SET_OR_DUPLICATE",
         "localized LOST nodes": "UIA_LOCALIZED_LOST_NOT_OBSERVED",
-        "independent build remains unverified": "independent_build_verified=$false",
+        "independent build verified in UIA binding": "independent_build_verified=$true",
+        "independent run and EXE binding": "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH",
+        "independent build failure": "INDEPENDENT_BUILD_NOT_VERIFIED",
     }
     for label, token in binding_guards.items():
         assert token in windows_job, "WINDOWS_UIA_BINDING_GUARD_MISSING:" + label
@@ -147,7 +149,12 @@ def run_checks(results):
                                 lambda candidate=changed: assert_binding_contract(candidate)))
     assert "signal-sprint-uia-hash-binding-v1" in windows_job, "UIA_BINDING_SCHEMA_MISSING"
     assert "path: evidence/" in windows_job, "UIA_BINDING_ARTIFACT_PATH_MISSING"
-    assert "PASS_HASH_BOUND_NOT_INDEPENDENT_BUILD_PROOF" in windows_job, "UIA_INDEPENDENCE_DISCLAIMER_MISSING"
+    assert "PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA" in windows_job, "UIA_INDEPENDENCE_BINDING_MISSING"
+    assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
+    assert "actions: read" in workflow, "GITHUB_ACTIONS_READ_PERMISSION_MISSING"
+    verifier = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
+    for token in ("RUN_NOT_SUCCESS", "RUN_SOURCE_MISMATCH", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_SOURCE_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY"):
+        assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     # Check the real UIA gate source, not only self-declared fixture constants.
     gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
