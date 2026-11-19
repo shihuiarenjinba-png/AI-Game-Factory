@@ -25,6 +25,7 @@ on:
         type: string
 permissions:
   contents: read
+  actions: read
 jobs:
   cloud-provenance-fixture:
     runs-on: ubuntu-latest
@@ -119,6 +120,15 @@ jobs:
             throw 'BUILD_RUN_URL_INVALID_OR_UNTRUSTED'
           }
           [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_receipt_sha256=$receiptFileSha; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Verify actual GitHub build run artifact and EXE bytes
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXE_PATH: ${{ inputs.exe_path }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+        run: |
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
       - name: Run JA and EN UIA gate
         shell: pwsh
         env:
@@ -134,6 +144,9 @@ jobs:
           $preflight = Get-Content -LiteralPath evidence/preflight-receipt.json -Raw | ConvertFrom-Json
           $uia = Get-Content -LiteralPath evidence/uia-receipt.json -Raw | ConvertFrom-Json
           if ($preflight.provenance -cne 'RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED') { throw 'PREFLIGHT_PROVENANCE_UNEXPECTED' }
+          $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
+          if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
+          if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
           if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
           if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
           if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
@@ -160,12 +173,14 @@ jobs:
           }
           [pscustomobject]@{
             schema='signal-sprint-uia-hash-binding-v1'
-            status='PASS_HASH_BOUND_NOT_INDEPENDENT_BUILD_PROOF'
+            status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
             exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
             build_receipt_sha256=$preflight.build_receipt_sha256
             product_source=$preflight.product_source
             workflow_head=$preflight.workflow_head
-            independent_build_verified=$false
+            independent_build_verified=$true
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
             physical_gui_receipt_status=$uia.status
           } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
       - name: Upload receipts even on failure
