@@ -135,6 +135,16 @@ def run_checks(results):
     for label, token in binding_guards.items():
         assert token in windows_job, "WINDOWS_UIA_BINDING_GUARD_MISSING:" + label
         results.append({"case": "Windows UIA binding guard " + label, "result": "PASS_STATIC_ONLY"})
+    # Mutation-test the Windows receipt-binding contract itself. A static green
+    # fixture must fail when a critical receipt guard is removed from the workflow.
+    def assert_binding_contract(candidate):
+        for label, token in binding_guards.items():
+            assert token in candidate, "WINDOWS_UIA_BINDING_GUARD_MISSING:" + label
+    for label, token in binding_guards.items():
+        changed = windows_job.replace(token, "REMOVED_BY_MUTATION_TEST")
+        assert changed != windows_job, "BINDING_MUTATION_NO_EFFECT:" + label
+        results.append(negative("Windows binding mutation reject " + label,
+                                lambda candidate=changed: assert_binding_contract(candidate)))
     assert "signal-sprint-uia-hash-binding-v1" in windows_job, "UIA_BINDING_SCHEMA_MISSING"
     assert "path: evidence/" in windows_job, "UIA_BINDING_ARTIFACT_PATH_MISSING"
     assert "PASS_HASH_BOUND_NOT_INDEPENDENT_BUILD_PROOF" in windows_job, "UIA_INDEPENDENCE_DISCLAIMER_MISSING"
