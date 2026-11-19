@@ -121,6 +121,23 @@ def run_checks(results):
         results.append({"case": "Windows preflight guard " + label, "result": "PASS_STATIC_ONLY"})
     assert "if: github.event_name == 'workflow_dispatch'" in windows_job, "UIA_MUST_REQUIRE_DISPATCH"
     assert "if-no-files-found: warn" in windows_job, "WINDOWS_FAILURE_EVIDENCE_POLICY_DRIFT"
+    # The Windows binding must reject incomplete, duplicated, or cross-language UIA evidence.
+    # Static checks only: these do not certify a physical GUI run or an independent build.
+    binding_guards = {
+        "receipt status and total": "UIA_NOT_PASS_OR_INCOMPLETE",
+        "source label binding": "UIA_SOURCE_LABEL_MISMATCH",
+        "measured EXE hash binding": "UIA_EXE_SHA_NOT_PREFLIGHT_SHA",
+        "per-language semantic side effects": "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE",
+        "exact button set and duplicate rejection": "UIA_BUTTON_EXACT_SET_OR_DUPLICATE",
+        "localized LOST nodes": "UIA_LOCALIZED_LOST_NOT_OBSERVED",
+        "independent build remains unverified": "independent_build_verified=$false",
+    }
+    for label, token in binding_guards.items():
+        assert token in windows_job, "WINDOWS_UIA_BINDING_GUARD_MISSING:" + label
+        results.append({"case": "Windows UIA binding guard " + label, "result": "PASS_STATIC_ONLY"})
+    assert "signal-sprint-uia-hash-binding-v1" in windows_job, "UIA_BINDING_SCHEMA_MISSING"
+    assert "path: evidence/" in windows_job, "UIA_BINDING_ARTIFACT_PATH_MISSING"
+    assert "PASS_HASH_BOUND_NOT_INDEPENDENT_BUILD_PROOF" in windows_job, "UIA_INDEPENDENCE_DISCLAIMER_MISSING"
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     # Check the real UIA gate source, not only self-declared fixture constants.
     gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
