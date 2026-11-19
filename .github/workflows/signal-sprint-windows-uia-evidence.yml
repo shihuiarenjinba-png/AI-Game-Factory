@@ -142,7 +142,21 @@ jobs:
             if ($cases.Count -ne 5 -or @($cases | Where-Object { $_.side_effect_verified -ne $true }).Count -gt 0) {
               throw "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:$lang"
             }
-            if (@($cases | Where-Object { @($_.lost_uia_nodes).Count -gt 0 }).Count -eq 0) { throw "UIA_LOST_NOT_OBSERVED:$lang" }
+            $expectedNames = if ($lang -ceq 'EN') {
+              @('Start / Retry (R)','Undo (U)','Save (Ctrl+S)','Load (L)','日本語 (J)')
+            } else {
+              @('開始 / 再挑戦 (R)','1手戻す (U)','保存 (Ctrl+S)','読込 (L)','English (J)')
+            }
+            $actualNames = @($cases | ForEach-Object { [string]$_.name })
+            if ((@($actualNames | Select-Object -Unique).Count -ne 5) -or
+                ((@($actualNames | Sort-Object) -join [char]0) -cne (@($expectedNames | Sort-Object) -join [char]0))) {
+              throw "UIA_BUTTON_EXACT_SET_OR_DUPLICATE:$lang"
+            }
+            $lostToken = if ($lang -ceq 'EN') { 'ControlType.Text:LOST' } else { 'ControlType.Text:失敗' }
+            $lostCases = @($cases | Where-Object {
+              @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
+            })
+            if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
           }
           [pscustomobject]@{
             schema='signal-sprint-uia-hash-binding-v1'
