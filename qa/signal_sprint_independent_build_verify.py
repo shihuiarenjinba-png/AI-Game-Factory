@@ -15,7 +15,7 @@ REPO = "shihuiarenjinba-png/AI-Game-Factory"
 SOURCE = "1a349faa41663c417c40710140a4d50c79b62b78"
 API = "https://api.github.com/repos/" + REPO
 SHA = re.compile(r"^[0-9a-f]{64}$")
-RUN = re.compile(r"^https://github\\.com/" + REPO + r"/actions/runs/([1-9][0-9]*)$")
+RUN = re.compile(r"^https://github\.com/" + REPO + r"/actions/runs/([1-9][0-9]*)$")
 
 
 def require(condition, reason):
