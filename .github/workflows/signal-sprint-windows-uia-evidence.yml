@@ -4,6 +4,7 @@ on:
     branches: [codex/signal-sprint-uia-fixture-20261110]
     paths:
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_independent_build_verify.py'
       - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
   workflow_dispatch:
     inputs:
