@@ -126,6 +126,34 @@ jobs:
         run: |
           & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
           if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Bind measured UIA EXE hash to preflight receipt
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $preflight = Get-Content -LiteralPath evidence/preflight-receipt.json -Raw | ConvertFrom-Json
+          $uia = Get-Content -LiteralPath evidence/uia-receipt.json -Raw | ConvertFrom-Json
+          if ($preflight.provenance -cne 'RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED') { throw 'PREFLIGHT_PROVENANCE_UNEXPECTED' }
+          if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
+          if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
+          if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
+          foreach ($lang in @('EN','JP')) {
+            $cases = @($uia.evidence | Where-Object { $_.language -ceq $lang })
+            if ($cases.Count -ne 5 -or @($cases | Where-Object { $_.side_effect_verified -ne $true }).Count -gt 0) {
+              throw "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:$lang"
+            }
+            if (@($cases | Where-Object { @($_.lost_uia_nodes).Count -gt 0 }).Count -eq 0) { throw "UIA_LOST_NOT_OBSERVED:$lang" }
+          }
+          [pscustomobject]@{
+            schema='signal-sprint-uia-hash-binding-v1'
+            status='PASS_HASH_BOUND_NOT_INDEPENDENT_BUILD_PROOF'
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            build_receipt_sha256=$preflight.build_receipt_sha256
+            product_source=$preflight.product_source
+            workflow_head=$preflight.workflow_head
+            independent_build_verified=$false
+            physical_gui_receipt_status=$uia.status
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
       - name: Upload receipts even on failure
         if: always()
         uses: actions/upload-artifact@v4
