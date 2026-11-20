@@ -46,6 +46,68 @@ def assert_gate_contract(gate):
             assert "'" + name + "'" in gate, "UIA_BUTTON_CONTRACT_MISSING:" + language + ":" + name
         assert LOST[language] in gate, "UIA_LOST_LABEL_MISSING:" + language
 
+
+def assert_independent_verifier_with_mock_api(results):
+    """Execute verifier against deterministic API/ZIP bytes, never a real GitHub build."""
+    import importlib.util
+    import io
+    import tempfile
+    import zipfile
+    spec = importlib.util.spec_from_file_location("independent_build", "qa/signal_sprint_independent_build_verify.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    exe = b"synthetic-test-exe-only"
+    sha = hashlib.sha256(exe).hexdigest()
+    run_id, artifact_id, member = 123456, 789012, "build/SignalSprint.exe"
+    url = f"https://github.com/{REPO}/actions/runs/{run_id}"
+    receipt = {"source_commit": SOURCE, "exe_sha256": sha, "build_run_url": url,
+               "artifact_id": artifact_id, "artifact_exe_path": member}
+    run = {"id": run_id, "repository": {"full_name": REPO},
+           "status": "completed", "conclusion": "success", "head_sha": SOURCE}
+    artifact = {"id": artifact_id, "expired": False,
+                "workflow_run": {"id": run_id, "head_sha": SOURCE}}
+    def archive_for(data):
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as z:
+            z.writestr(member, data)
+        return output.getvalue()
+    archive = archive_for(exe)
+    def make_fetch(run_obj, artifact_obj, zip_bytes):
+        def fetch(url, token, accept="application/vnd.github+json"):
+            if url == f"{module.API}/actions/runs/{run_id}":
+                return json.dumps(run_obj).encode()
+            if url == f"{module.API}/actions/artifacts/{artifact_id}":
+                return json.dumps(artifact_obj).encode()
+            if url == f"{module.API}/actions/artifacts/{artifact_id}/zip":
+                return zip_bytes
+            raise AssertionError("UNEXPECTED_API_URL")
+        return fetch
+    with tempfile.TemporaryDirectory() as temp:
+        exe_path = pathlib.Path(temp) / "synthetic.exe"
+        exe_path.write_bytes(exe)
+        fetch = make_fetch(run, artifact, archive)
+        good = module.verify(receipt, exe_path, "mock-token", fetch=fetch)
+        assert good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
+        assert good["exe_sha256"] == sha and good["physical_gui_verified"] is False
+        results.append({"case": "mock API run/artifact/EXE positive", "result": "PASS_SYNTHETIC"})
+        mutations = [
+            ("failed build run", receipt, {**run, "conclusion": "failure"}, artifact, archive, exe),
+            ("wrong run source", receipt, {**run, "head_sha": HEAD}, artifact, archive, exe),
+            ("artifact belongs to other run", receipt, run, {**artifact, "workflow_run": {"id": run_id + 1, "head_sha": SOURCE}}, archive, exe),
+            ("artifact source mismatch", receipt, run, {**artifact, "workflow_run": {"id": run_id, "head_sha": HEAD}}, archive, exe),
+            ("tampered artifact EXE", receipt, run, artifact, archive_for(exe + b"tampered"), exe),
+            ("tampered local EXE", receipt, run, artifact, archive, exe + b"tampered"),
+            ("expired artifact", receipt, run, {**artifact, "expired": True}, archive, exe),
+            ("wrong run repository", receipt, {**run, "repository": {"full_name": "other/repo"}}, artifact, archive, exe),
+            ("wrong artifact id", {**receipt, "artifact_id": artifact_id + 1}, run, artifact, archive, exe),
+            ("missing artifact path", {**receipt, "artifact_exe_path": "missing.exe"}, run, artifact, archive, exe),
+        ]
+        for label, candidate, run_obj, art_obj, zipped, local in mutations:
+            exe_path.write_bytes(local)
+            results.append(negative("mock API " + label, lambda c=candidate, r=run_obj, a=art_obj, z=zipped:
+                module.verify(c, exe_path, "mock-token", fetch=make_fetch(r, a, z))))
+        exe_path.write_bytes(exe)
+
 def run_checks(results):
     exe = b"synthetic-fixture-only-not-a-shipping-executable"
     digest = hashlib.sha256(exe).hexdigest()
@@ -84,6 +146,7 @@ def run_checks(results):
         kwargs = {"receipt": receipt, "exe": exe, "expected_sha": digest, "expected_source": SOURCE}
         kwargs.update(update)
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
+    assert_independent_verifier_with_mock_api(results)
     # Keep the cloud fixture aligned with the actual Windows preflight contract.
     workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
     assert "$productSource = '" + SOURCE + "'" in workflow, "WORKFLOW_PRODUCT_SOURCE_DRIFT"
