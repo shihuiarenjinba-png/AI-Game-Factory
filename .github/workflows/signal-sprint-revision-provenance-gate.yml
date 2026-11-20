@@ -48,5 +48,5 @@ jobs:
         with:
           name: signal-sprint-revision-gate-evidence
           path: evidence/revision-gate.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
