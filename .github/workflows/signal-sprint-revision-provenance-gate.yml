@@ -1,0 +1,52 @@
+name: Signal Sprint revision provenance gate (QA only)
+on:
+  push:
+    branches: [codex/signal-sprint-revision-provenance-gate-20261120]
+    paths:
+      - 'qa/signal_sprint_revision_gate.py'
+      - 'qa/test_signal_sprint_revision_gate.py'
+      - '.github/workflows/signal-sprint-revision-provenance-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  revision-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Exact-head check
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Unit tests
+        run: python3 -m unittest qa.test_signal_sprint_revision_gate -v
+      - name: Evaluate frozen source (expected rejection is a QA success)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p evidence
+          set +e
+          python3 -m qa.signal_sprint_revision_gate --output evidence/revision-gate.json
+          rc=$?
+          set -e
+          python3 - "$rc" <<'PY'
+          import json,sys
+          from qa.signal_sprint_revision_gate import FROZEN_SOURCE, REQUIRED_REVISION
+          d=json.load(open('evidence/revision-gate.json',encoding='utf-8'))
+          assert int(sys.argv[1]) != 0, 'UNEXPECTED_PRODUCT_GATE_PASS'
+          assert d['status']=='FAIL' and d['error']=='REVISION_NOT_IN_PRODUCT_SOURCE', d
+          assert d['product_source']==FROZEN_SOURCE and d['required_revision']==REQUIRED_REVISION
+          assert d['physical_gui_verified'] is False
+          print('PASS_EXPECTED_REJECTION; PRODUCT_FUNCTIONAL_HOLD')
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-revision-gate-evidence
+          path: evidence/revision-gate.json
+          if-no-files-found: warn
+          retention-days: 30
