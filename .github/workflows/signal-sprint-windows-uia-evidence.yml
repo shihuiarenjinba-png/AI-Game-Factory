@@ -56,6 +56,57 @@ jobs:
           path: evidence/cloud-provenance-fixture.json
           if-no-files-found: error
           retention-days: 30
+  cloud-revision-hold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record frozen source revision inclusion before physical UIA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          source = '1a349faa41663c417c40710140a4d50c79b62b78'
+          revision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          def git(*args):
+              return subprocess.run(['git', *args], capture_output=True, text=True)
+          source_exists = git('cat-file', '-e', source + '^{commit}').returncode == 0
+          revision_exists = git('cat-file', '-e', revision + '^{commit}').returncode == 0
+          included = source_exists and revision_exists and git('merge-base', '--is-ancestor', revision, source).returncode == 0
+          result = {
+              'schema': 'signal-sprint-cloud-revision-preflight-v1',
+              'product_source': source,
+              'required_revision': revision,
+              'source_exists': source_exists,
+              'revision_exists': revision_exists,
+              'revision_included': included,
+              'status': 'PASS_REVISION_INCLUDED' if included else 'HOLD_REVISION_NOT_IN_FROZEN_SOURCE',
+              'physical_gui_verified': False,
+              'independent_build_verified': False,
+              'product_acceptance': False,
+          }
+          Path('evidence/cloud-revision-preflight.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          if not source_exists or not revision_exists:
+              raise SystemExit('MISSING_REQUIRED_GIT_OBJECT')
+          if included:
+              raise SystemExit('FIXTURE_EXPECTED_REVISION_MISMATCH_NO_LONGER_PRESENT_REVIEW_FREEZE')
+          print('EXPECTED_PRODUCT_HOLD: frozen source lacks required WIN/LOSE revision; GUI not attested')
+          PY
+      - name: Upload independent revision preflight
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-cloud-revision-preflight
+          path: evidence/cloud-revision-preflight.json
+          if-no-files-found: error
+          retention-days: 30
   bilingual-uia:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/signal-sprint-uia-fixture-20261110'
     runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
