@@ -172,6 +172,25 @@ jobs:
             })
             if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
           }
+          # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
+          # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $preflight.product_source
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-revision-binding-v1'
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'FAIL_REVISION_NOT_IN_PRODUCT_SOURCE' })
+            required_revision=$requiredRevision
+            product_source=$preflight.product_source
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            physical_gui_receipt_status=$uia.status
+            product_acceptance=$revisionIncluded
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/revision-binding.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'REVISION_NOT_IN_PRODUCT_SOURCE' }
           [pscustomobject]@{
             schema='signal-sprint-uia-hash-binding-v1'
             status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
