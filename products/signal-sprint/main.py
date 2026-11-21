@@ -141,6 +141,14 @@ UI_MESSAGE_JP = {
     "Saved on this computer.": "このPCに保存しました。",
 }
 UI_STATUS_JP = {"PLAYING": "プレイ中", "WON": "クリア", "LOST": "失敗"}
+UI_RULES = {
+    "EN": "WIN: collect all 3 energy cells and reach EXIT.  LOSE: use all 30 moves before escaping.",
+    "JP": "勝利：3つのエネルギーを集めてEXITへ到達。  敗北：出口に着く前に30手を使い切る。",
+}
+
+
+def ui_rules(language):
+    return UI_RULES["JP" if language == "JP" else "EN"]
 
 
 def ui_message(message, language):
@@ -256,7 +264,10 @@ def launch():
     info.pack(anchor="w", pady=(6, 10))
     controls = tk.Label(panel, bg="#101827", fg="#9eb5cb",
                         wraplength=270, justify="left")
-    controls.pack(anchor="w", pady=(0, 10))
+    controls.pack(anchor="w", pady=(0, 6))
+    rules = tk.Label(panel, bg="#101827", fg="#d7e8f7", wraplength=275,
+                     justify="left", font=("Segoe UI", 9, "bold"))
+    rules.pack(anchor="w", pady=(0, 10))
     message = tk.Label(panel, bg="#1d3047", fg="#fff", wraplength=260,
                        justify="left", padx=8, pady=10)
     message.pack(fill="x", pady=(0, 10))
@@ -266,12 +277,20 @@ def launch():
     button_frame.grid_columnconfigure(1, weight=1)
     buttons = []
 
+    # Native Win32 controls expose standard UIA Button/Invoke and Text patterns.
+    # Tk's themed drawing alone is not an accessibility contract on Windows.
+    native_uia = None
+    if os.name == "nt":
+        from signal_sprint_uia_win32 import NativeUIABridge
+        native_uia = NativeUIABridge(root, message, buttons)
+
     def draw():
         words = labels[language[0]]
         root.title("Signal Sprint | " + language[0])
         heading.config(text=words[0])
         subtitle.config(text=words[1])
         controls.config(text=words[2])
+        rules.config(text=ui_rules(language[0]))
         info.config(text=f"{words[3]}: {MAX_TURNS-game.turns}\n{words[4]}: {len(game.collected)}/3")
         status = UI_STATUS_JP.get(game.status, game.status) if language[0] == "JP" else game.status
         message.config(text=status + "\n\n" + ui_message(game.message, language[0]),
@@ -279,6 +298,8 @@ def launch():
                           "#ff9e9e" if game.status == "LOST" else "#fff")
         for button, title in zip(buttons, words[5:]):
             button.config(text=title)
+        if native_uia is not None:
+            native_uia.refresh(words[5:], status + "\n" + ui_message(game.message, language[0]))
         canvas.delete("all")
         for y in range(SIZE):
             for x in range(SIZE):
@@ -443,6 +464,8 @@ def launch():
         # Never show a taskbar-obscured window as if it were verified.
         root.destroy()
 
+    if native_uia is not None:
+        native_uia.install((restart, undo, save, load, toggle))
     root.bind("<Key>", key)
     root.bind("<Configure>", adapt_board)
     canvas.bind("<Button-1>", click)
