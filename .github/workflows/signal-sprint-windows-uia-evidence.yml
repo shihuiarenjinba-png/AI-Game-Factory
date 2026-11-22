@@ -1,0 +1,282 @@
+name: Signal Sprint Windows UIA evidence (GDK only)
+on:
+  push:
+    branches: [codex/signal-sprint-uia-fixture-20261110]
+    paths:
+      - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_independent_build_verify.py'
+      - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact 40-character workflow branch commit SHA to attest before checkout
+        required: true
+        type: string
+      exe_path:
+        description: Absolute path to independently built Signal Sprint EXE on interactive Windows runner
+        required: true
+        type: string
+      exe_sha256:
+        description: Independently attested SHA256 of EXE
+        required: true
+        type: string
+      build_receipt_path:
+        description: Absolute path to independently produced JSON build receipt (source_commit, exe_sha256, build_run_url)
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  cloud-provenance-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert exact-head cloud checkout
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD" || { echo 'CLOUD_EXACT_HEAD_MISMATCH'; exit 1; }
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            test "${{ inputs.expected_head }}" = "$EXPECTED_HEAD" || { echo 'DISPATCH_EXPECTED_HEAD_MISMATCH'; exit 1; }
+          fi
+      - name: Run synthetic provenance and JA/EN static contract checks
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          ACTIONS_RUN_ID: ${{ github.run_id }}
+        run: python3 qa/signal_sprint_cloud_provenance_fixture.py
+      - name: Upload cloud fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-cloud-provenance-fixture
+          path: evidence/cloud-provenance-fixture.json
+          if-no-files-found: error
+          retention-days: 30
+  cloud-revision-hold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record frozen source revision inclusion before physical UIA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          source = '1a349faa41663c417c40710140a4d50c79b62b78'
+          revision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          def git(*args):
+              return subprocess.run(['git', *args], capture_output=True, text=True)
+          source_exists = git('cat-file', '-e', source + '^{commit}').returncode == 0
+          revision_exists = git('cat-file', '-e', revision + '^{commit}').returncode == 0
+          included = source_exists and revision_exists and git('merge-base', '--is-ancestor', revision, source).returncode == 0
+          result = {
+              'schema': 'signal-sprint-cloud-revision-preflight-v1',
+              'product_source': source,
+              'required_revision': revision,
+              'source_exists': source_exists,
+              'revision_exists': revision_exists,
+              'revision_included': included,
+              'status': 'PASS_REVISION_INCLUDED' if included else 'HOLD_REVISION_NOT_IN_FROZEN_SOURCE',
+              'physical_gui_verified': False,
+              'independent_build_verified': False,
+              'product_acceptance': False,
+          }
+          Path('evidence/cloud-revision-preflight.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          if not source_exists or not revision_exists:
+              raise SystemExit('MISSING_REQUIRED_GIT_OBJECT')
+          if included:
+              raise SystemExit('FIXTURE_EXPECTED_REVISION_MISMATCH_NO_LONGER_PRESENT_REVIEW_FREEZE')
+          print('EXPECTED_PRODUCT_HOLD: frozen source lacks required WIN/LOSE revision; GUI not attested')
+          PY
+      - name: Upload independent revision preflight
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-cloud-revision-preflight
+          path: evidence/cloud-revision-preflight.json
+          if-no-files-found: error
+          retention-days: 30
+  bilingual-uia:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/signal-sprint-uia-fixture-20261110'
+    runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_head }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Preflight exact checkout and EXE provenance
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          DISPATCH_HEAD: ${{ github.sha }}
+          EXPECTED_EXE_SHA256: ${{ inputs.exe_sha256 }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          # Emit a machine-readable failure receipt even if preflight aborts early.
+          trap {
+            $failure = [pscustomobject]@{
+              schema = 'signal-sprint-preflight-v2'
+              status = 'FAIL'
+              error = [string]$_.Exception.Message
+              provenance = 'NOT_INDEPENDENTLY_VERIFIED'
+              gui = 'NOT_TESTED'
+            }
+            $failure | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath evidence/preflight-receipt.json -Encoding utf8
+            Write-Error ('PREFLIGHT_FAILED: ' + [string]$_.Exception.Message) -ErrorAction Continue
+            exit 1
+          }
+          $head = (git rev-parse HEAD).Trim()
+          $expectedHead = [string]$env:EXPECTED_HEAD
+          if ($expectedHead -cnotmatch '^[a-f0-9]{40}$') { throw 'EXPECTED_HEAD_INVALID' }
+          if ($env:DISPATCH_HEAD -cne $expectedHead) { throw 'DISPATCH_HEAD_MISMATCH' }
+          $productSource = '1a349faa41663c417c40710140a4d50c79b62b78'
+          $pr30 = 'a377043d3c9ab0c71d9a100cdb841dd7000313b9'
+          if ($head -cne $expectedHead) { throw "CHECKOUT_HEAD_MISMATCH: $head" }
+          git merge-base --is-ancestor $pr30 $productSource
+          if ($LASTEXITCODE -ne 0) { throw 'PR30_SOURCE_ANCESTRY_MISMATCH' }
+          git merge-base --is-ancestor $productSource $head
+          if ($LASTEXITCODE -ne 0) { throw 'PRODUCT_SOURCE_NOT_IN_UIA_HEAD' }
+          # Fail closed before launching the physical GUI or trusting any executable.
+          # Keep this physical-run receipt distinct from the cloud static fixture.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $productSource
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-physical-revision-preflight-v1'
+            product_source=$productSource
+            required_revision=$requiredRevision
+            revision_included=$revisionIncluded
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'HOLD_REVISION_NOT_IN_FROZEN_SOURCE' })
+            physical_gui_verified=$false
+            independent_build_verified=$false
+            product_acceptance=$false
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/physical-revision-preflight.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'PHYSICAL_PREFLIGHT_REVISION_NOT_IN_FROZEN_SOURCE' }
+          if (-not [Environment]::UserInteractive) { throw 'INTERACTIVE_DESKTOP_REQUIRED' }
+          if (-not [IO.Path]::IsPathFullyQualified($env:EXE_PATH) -or -not (Test-Path -LiteralPath $env:EXE_PATH -PathType Leaf)) { throw 'EXE_MISSING_OR_NOT_ABSOLUTE' }
+          if ($env:EXPECTED_EXE_SHA256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'INVALID_EXPECTED_EXE_SHA256' }
+          $actual = (Get-FileHash -LiteralPath $env:EXE_PATH -Algorithm SHA256).Hash
+          if ($actual -ine $env:EXPECTED_EXE_SHA256) { throw 'EXE_SHA256_MISMATCH' }
+          if (-not [IO.Path]::IsPathFullyQualified($env:BUILD_RECEIPT_PATH) -or -not (Test-Path -LiteralPath $env:BUILD_RECEIPT_PATH -PathType Leaf)) { throw 'BUILD_RECEIPT_MISSING' }
+          $receiptFileSha = (Get-FileHash -LiteralPath $env:BUILD_RECEIPT_PATH -Algorithm SHA256).Hash
+          $receipt = Get-Content -LiteralPath $env:BUILD_RECEIPT_PATH -Raw | ConvertFrom-Json
+          if ($receipt.source_commit -cne $productSource) { throw 'BUILD_SOURCE_MISMATCH' }
+          if ($receipt.exe_sha256 -ine $actual) { throw 'BUILD_RECEIPT_EXE_SHA_MISMATCH' }
+          if ([string]::IsNullOrWhiteSpace($receipt.build_run_url)) { throw 'BUILD_RUN_PROVENANCE_MISSING' }
+          $buildRunUrl = [string]$receipt.build_run_url
+          $uri = $null
+          if (-not [Uri]::TryCreate($buildRunUrl, [UriKind]::Absolute, [ref]$uri) -or
+              $uri.Scheme -cne 'https' -or $uri.Host -cne 'github.com' -or
+              -not $uri.IsDefaultPort -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
+              $uri.AbsolutePath -cnotmatch '^/shihuiarenjinba-png/AI-Game-Factory/actions/runs/[1-9][0-9]*$') {
+            throw 'BUILD_RUN_URL_INVALID_OR_UNTRUSTED'
+          }
+          [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_receipt_sha256=$receiptFileSha; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Verify actual GitHub build run artifact and EXE bytes
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXE_PATH: ${{ inputs.exe_path }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+        run: |
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Bind measured UIA EXE hash to preflight receipt
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $preflight = Get-Content -LiteralPath evidence/preflight-receipt.json -Raw | ConvertFrom-Json
+          $uia = Get-Content -LiteralPath evidence/uia-receipt.json -Raw | ConvertFrom-Json
+          if ($preflight.provenance -cne 'RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED') { throw 'PREFLIGHT_PROVENANCE_UNEXPECTED' }
+          $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
+          if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
+          if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
+          if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
+          if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
+          if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
+          foreach ($lang in @('EN','JP')) {
+            $cases = @($uia.evidence | Where-Object { $_.language -ceq $lang })
+            if ($cases.Count -ne 5 -or @($cases | Where-Object { $_.side_effect_verified -ne $true }).Count -gt 0) {
+              throw "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:$lang"
+            }
+            $expectedNames = if ($lang -ceq 'EN') {
+              @('Start / Retry (R)','Undo (U)','Save (Ctrl+S)','Load (L)','日本語 (J)')
+            } else {
+              @('開始 / 再挑戦 (R)','1手戻す (U)','保存 (Ctrl+S)','読込 (L)','English (J)')
+            }
+            $actualNames = @($cases | ForEach-Object { [string]$_.name })
+            if ((@($actualNames | Select-Object -Unique).Count -ne 5) -or
+                ((@($actualNames | Sort-Object) -join [char]0) -cne (@($expectedNames | Sort-Object) -join [char]0))) {
+              throw "UIA_BUTTON_EXACT_SET_OR_DUPLICATE:$lang"
+            }
+            $lostToken = if ($lang -ceq 'EN') { 'ControlType.Text:LOST' } else { 'ControlType.Text:失敗' }
+            $lostCases = @($cases | Where-Object {
+              @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
+            })
+            if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
+          }
+          # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
+          # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $preflight.product_source
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-revision-binding-v1'
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'FAIL_REVISION_NOT_IN_PRODUCT_SOURCE' })
+            required_revision=$requiredRevision
+            product_source=$preflight.product_source
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            physical_gui_receipt_status=$uia.status
+            product_acceptance=$revisionIncluded
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/revision-binding.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'REVISION_NOT_IN_PRODUCT_SOURCE' }
+          [pscustomobject]@{
+            schema='signal-sprint-uia-hash-binding-v1'
+            status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            build_receipt_sha256=$preflight.build_receipt_sha256
+            product_source=$preflight.product_source
+            workflow_head=$preflight.workflow_head
+            independent_build_verified=$true
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            physical_gui_receipt_status=$uia.status
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30

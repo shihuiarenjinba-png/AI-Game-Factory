@@ -43,6 +43,18 @@ class UIRevisionTests(unittest.TestCase):
         self.assertIn("読み込", game_module.ui_message("Load failed: ValueError", "JP"))
         self.assertEqual(set(game_module.UI_STATUS_JP), {"PLAYING", "WON", "LOST"})
 
+    def test_win_loss_rules_are_explicit(self):
+        en = game_module.ui_rules("EN")
+        jp = game_module.ui_rules("JP")
+        self.assertIn("WIN:", en)
+        self.assertIn("LOSE:", en)
+        self.assertIn("3 energy", en)
+        self.assertIn("30 moves", en)
+        self.assertIn("勝利", jp)
+        self.assertIn("敗北", jp)
+        self.assertIn("3つ", jp)
+        self.assertIn("30手", jp)
+
     def test_retry_after_exhausting_moves_restores_first_turn(self):
         game = game_module.Game()
         # Thirty legal moves in the first corridor, without altering game rules.

@@ -1,0 +1,41 @@
+name: Signal Sprint evidence contract fixtures (no GUI)
+on:
+  push:
+    branches: [codex/signal-sprint-uia-fixture-20261110]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evidence-contract-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert exact branch HEAD checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = "refs/heads/codex/signal-sprint-uia-fixture-20261110"
+      - name: Verify positive and negative evidence fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v qa/test_signal_sprint_evidence_contract.py 2>&1 | tee fixture-results.txt
+      - name: Record source and fixture run identity
+        if: always()
+        shell: bash
+        run: |
+          printf '{"branch_head":"%s","run_id":"%s","contract_only":true,"gui_pass":false,"gdk_package_pass":false}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > fixture-run.json
+      - name: Upload fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-contract-fixtures
+          path: |
+            fixture-results.txt
+            fixture-run.json
+          if-no-files-found: warn
+          retention-days: 30
