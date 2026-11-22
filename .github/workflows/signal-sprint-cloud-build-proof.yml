@@ -1,0 +1,83 @@
+name: Signal Sprint independent cloud build proof (GDK only)
+on:
+  push:
+    branches: [codex/signal-sprint-cloud-build-proof-20261123]
+    paths:
+      - '.github/workflows/signal-sprint-cloud-build-proof.yml'
+      - 'qa/signal_sprint_independent_build_verify.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  independent-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      BUILD_RUN_ID: ${{ vars.SIGNAL_SPRINT_BUILD_RUN_ID }}
+      BUILD_ARTIFACT_ID: ${{ vars.SIGNAL_SPRINT_BUILD_ARTIFACT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert exact head and verify independently when evidence exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          mkdir -p evidence
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          status = 'HOLD_BUILD_ARTIFACT_NOT_CONFIGURED'
+          if os.environ.get('BUILD_RUN_ID','').isdigit() and os.environ.get('BUILD_ARTIFACT_ID','').isdigit():
+              status = 'PENDING_INDEPENDENT_VERIFICATION'
+          Path('evidence/cloud-build-proof.json').write_text(json.dumps({
+              'schema':'signal-sprint-cloud-build-proof-v1',
+              'status':status,
+              'product_source':'1a349faa41663c417c40710140a4d50c79b62b78',
+              'independent_build_verified':False,
+              'physical_gui_verified':False,
+              'product_acceptance':False
+          }, indent=2)+'\n')
+          PY
+          if [[ ! "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ || ! "$BUILD_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'HOLD: configure verified build run and artifact IDs; synthetic fixture is not build evidence'
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/actions/artifacts/$BUILD_ARTIFACT_ID/zip" > /tmp/build-artifact.zip
+          python3 - <<'PY'
+          import json, os, zipfile
+          from pathlib import Path
+          with zipfile.ZipFile('/tmp/build-artifact.zip') as z:
+              names=z.namelist()
+              if names.count('build-receipt.json')!=1: raise SystemExit('HOLD_BUILD_RECEIPT_NOT_IN_ARTIFACT')
+              receipt=json.loads(z.read('build-receipt.json'))
+              member=receipt.get('artifact_exe_path')
+              if not isinstance(member,str) or names.count(member)!=1: raise SystemExit('HOLD_EXE_NOT_IN_ARTIFACT')
+              if z.getinfo(member).file_size > 512*1024*1024: raise SystemExit('HOLD_EXE_TOO_LARGE')
+              if receipt.get('artifact_id')!=int(os.environ['BUILD_ARTIFACT_ID']): raise SystemExit('HOLD_ARTIFACT_ID_MISMATCH')
+              if receipt.get('build_run_url')!=f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{os.environ['BUILD_RUN_ID']}": raise SystemExit('HOLD_RUN_ID_MISMATCH')
+              Path('/tmp/build-receipt.json').write_text(json.dumps(receipt))
+              with z.open(member) as src, open('/tmp/signal-sprint.exe','wb') as dst:
+                  import shutil
+                  shutil.copyfileobj(src,dst,1024*1024)
+          PY
+          python3 qa/signal_sprint_independent_build_verify.py --receipt /tmp/build-receipt.json --exe /tmp/signal-sprint.exe --output evidence/independent-build-receipt.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result=json.loads(Path('evidence/independent-build-receipt.json').read_text())
+          result['physical_gui_verified']=False
+          result['product_acceptance']=False
+          Path('evidence/cloud-build-proof.json').write_text(json.dumps(result,indent=2)+'\n')
+          PY
+      - name: Upload evidence, including HOLD
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-independent-cloud-build-proof
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
