@@ -152,6 +152,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PR30_SOURCE_ANCESTRY_MISMATCH' }
           git merge-base --is-ancestor $productSource $head
           if ($LASTEXITCODE -ne 0) { throw 'PRODUCT_SOURCE_NOT_IN_UIA_HEAD' }
+          # Fail closed before launching the physical GUI or trusting any executable.
+          # Keep this physical-run receipt distinct from the cloud static fixture.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $productSource
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-physical-revision-preflight-v1'
+            product_source=$productSource
+            required_revision=$requiredRevision
+            revision_included=$revisionIncluded
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'HOLD_REVISION_NOT_IN_FROZEN_SOURCE' })
+            physical_gui_verified=$false
+            independent_build_verified=$false
+            product_acceptance=$false
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/physical-revision-preflight.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'PHYSICAL_PREFLIGHT_REVISION_NOT_IN_FROZEN_SOURCE' }
           if (-not [Environment]::UserInteractive) { throw 'INTERACTIVE_DESKTOP_REQUIRED' }
           if (-not [IO.Path]::IsPathFullyQualified($env:EXE_PATH) -or -not (Test-Path -LiteralPath $env:EXE_PATH -PathType Leaf)) { throw 'EXE_MISSING_OR_NOT_ABSOLUTE' }
           if ($env:EXPECTED_EXE_SHA256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'INVALID_EXPECTED_EXE_SHA256' }
