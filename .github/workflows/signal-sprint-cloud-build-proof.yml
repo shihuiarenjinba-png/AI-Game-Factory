@@ -329,25 +329,25 @@ jobs:
           path: evidence/
           if-no-files-found: error
           retention-days: 30
-gdk-package-readiness:
+  gdk-package-readiness:
     if: always()
     needs: [windows-frozen-source-exe, independent-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      WINDOWS_BUILD_RESULT: \${{ needs.windows-frozen-source-exe.result }}
-      INDEPENDENT_BUILD_RESULT: \${{ needs.independent-build.result }}
-      BUILD_ARTIFACT_ID: \${{ needs.windows-frozen-source-exe.outputs.artifact_id }}
-      BUILD_EXE_SHA256: \${{ needs.windows-frozen-source-exe.outputs.exe_sha256 }}
-      PRODUCT_SOURCE_SHA: \${{ needs.windows-frozen-source-exe.outputs.product_source_sha }}
-      PR30_SOURCE_SHA: \${{ needs.windows-frozen-source-exe.outputs.pr30_source_sha }}
-      WORKFLOW_HEAD_SHA: \${{ github.sha }}
-      BUILD_RUN_ID: \${{ github.run_id }}
+      WINDOWS_BUILD_RESULT: ${{ needs.windows-frozen-source-exe.result }}
+      INDEPENDENT_BUILD_RESULT: ${{ needs.independent-build.result }}
+      BUILD_ARTIFACT_ID: ${{ needs.windows-frozen-source-exe.outputs.artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.windows-frozen-source-exe.outputs.exe_sha256 }}
+      PRODUCT_SOURCE_SHA: ${{ needs.windows-frozen-source-exe.outputs.product_source_sha }}
+      PR30_SOURCE_SHA: ${{ needs.windows-frozen-source-exe.outputs.pr30_source_sha }}
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+      BUILD_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Checkout exact QA head and full source lineage
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           path: factory
           fetch-depth: 0
           persist-credentials: false
