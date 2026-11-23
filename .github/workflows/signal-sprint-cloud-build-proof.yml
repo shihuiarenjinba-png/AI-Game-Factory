@@ -83,16 +83,25 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $exe = 'frozen-source/dist/game/SignalSprint.exe'
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'FROZEN_SOURCE_EXE_MISSING' }
-          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
-          if ($bytes.Length -lt 100000 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) {
-            throw 'FROZEN_SOURCE_EXE_NOT_PE'
+          $stream = $null
+          try {
+            $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $exe).Path)
+            $mz = [byte[]]::new(2)
+            $read = $stream.Read($mz, 0, 2)
+            if ($stream.Length -lt 100000 -or $read -ne 2 -or $mz[0] -ne 77 -or $mz[1] -ne 90) {
+              throw 'FROZEN_SOURCE_EXE_NOT_PE'
+            }
+          } finally {
+            if ($null -ne $stream) { $stream.Dispose() }
           }
+          $exeSize = (Get-Item -LiteralPath $exe).Length
           $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           $provenance = [ordered]@{
             schema = 'signal-sprint-frozen-exe-provenance-v1'
             source_commit = $env:PRODUCT_SOURCE_SHA
             workflow_head_sha = $env:WORKFLOW_HEAD_SHA
             build_run_id = [long]$env:BUILD_RUN_ID
+            exe_size_bytes = [long]$exeSize
             exe_sha256 = $sha
             artifact_kind = 'EXE_QA_UNSIGNED'
             official_identity = 'HOLD_NOT_REGISTERED'
@@ -243,6 +252,7 @@ jobs:
           receipt = {
               "source_commit": source,
               "workflow_head_sha": workflow_head,
+              "exe_size_bytes": local_size,
               "exe_sha256": digest,
               "build_run_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}",
               "artifact_id": int(artifact_id),
