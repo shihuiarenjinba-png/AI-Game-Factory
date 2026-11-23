@@ -49,6 +49,147 @@ def assert_gate_contract(gate):
         assert actual == BUTTONS[language], "UIA_BUTTON_SET_OR_ORDER_DRIFT:" + language
         assert len(actual) == len(set(actual)) == 5, "UIA_BUTTON_DUPLICATE_OR_COUNT:" + language
         assert LOST[language] in gate, "UIA_LOST_LABEL_MISSING:" + language
+    for token in (
+        "LOAD_UIA_CASE_NOT_UNIQUE",
+        "LOST_UIA_NOT_OBSERVED",
+        "START_UIA_CASE_NOT_UNIQUE",
+        "START_LOST_PRECONDITION_NOT_OBSERVED",
+        "START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED",
+        "ControlType.Text:PLAYING",
+        "ControlType.Text:プレイ中",
+    ):
+        assert token in gate, "UIA_RUNTIME_LOST_TRANSITION_ASSERTION_MISSING:" + token
+
+
+def validate_uia_receipt(receipt, expected_exe_sha, expected_source):
+    """Validate the exact bilingual UIA receipt shape; synthetic fixtures never attest a GUI."""
+    assert isinstance(receipt, dict), "UIA_RECEIPT_NOT_OBJECT"
+    assert receipt.get("status") == "PASS", "UIA_RECEIPT_STATUS_NOT_PASS"
+    assert receipt.get("source_head") == expected_source, "UIA_SOURCE_LABEL_MISMATCH"
+    actual_sha = receipt.get("executable_sha256")
+    assert isinstance(actual_sha, str) and re.fullmatch(r"[a-fA-F0-9]{64}", actual_sha), "UIA_EXE_SHA_INVALID"
+    assert isinstance(expected_exe_sha, str) and re.fullmatch(r"[a-fA-F0-9]{64}", expected_exe_sha), "UIA_EXPECTED_EXE_SHA_INVALID"
+    assert actual_sha.lower() == expected_exe_sha.lower(), "UIA_EXE_SHA_NOT_PREFLIGHT_SHA"
+    evidence = receipt.get("evidence")
+    assert isinstance(evidence, list) and len(evidence) == 10, "UIA_NOT_PASS_OR_INCOMPLETE"
+    for language in ("EN", "JP"):
+        cases = [item for item in evidence if isinstance(item, dict) and item.get("language") == language]
+        assert len(cases) == 5, "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:" + language
+        names = [item.get("name") for item in cases]
+        assert all(isinstance(name, str) for name in names), "UIA_BUTTON_NAME_INVALID:" + language
+        assert len(names) == len(set(names)) == 5 and sorted(names) == sorted(BUTTONS[language]), "UIA_BUTTON_EXACT_SET_OR_DUPLICATE:" + language
+        by_name = {item["name"]: item for item in cases}
+        for item in cases:
+            assert item.get("control_type") == "ControlType.Button", "UIA_CONTROL_TYPE_MISMATCH:" + language
+            assert all(item.get(key) is True for key in ("invoke_pattern", "focus", "invoked", "side_effect_verified")), "UIA_ACTION_SEMANTIC_STATE_NOT_OBSERVABLE:" + language
+            assert isinstance(item.get("uia_before"), list) and isinstance(item.get("uia_after"), list), "UIA_STATE_NODES_INVALID:" + language
+        lost_token = "ControlType.Text:LOST" if language == "EN" else "ControlType.Text:失敗"
+        playing_token = "ControlType.Text:PLAYING" if language == "EN" else "ControlType.Text:プレイ中"
+        load_name = "Load (L)" if language == "EN" else "読込 (L)"
+        load_case = by_name[load_name]
+        assert isinstance(load_case.get("lost_uia_nodes"), list) and lost_token in load_case["lost_uia_nodes"], "UIA_LOAD_LOST_STATE_NOT_OBSERVED:" + language
+        assert lost_token in load_case["uia_after"], "UIA_LOAD_LOST_STATE_NOT_IN_POST_ACTION_TREE:" + language
+        start_name = "Start / Retry (R)" if language == "EN" else "開始 / 再挑戦 (R)"
+        start_case = by_name[start_name]
+        assert lost_token in start_case["uia_before"], "UIA_START_LOST_PRECONDITION_NOT_OBSERVED:" + language
+        assert playing_token in start_case["uia_after"] and lost_token not in start_case["uia_after"], "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:" + language
+        toggle_name = "日本語 (J)" if language == "EN" else "English (J)"
+        expected_title = "Signal Sprint | JP" if language == "EN" else "Signal Sprint | EN"
+        assert by_name[toggle_name].get("title_after") == expected_title, "UIA_LANGUAGE_TOGGLE_NOT_OBSERVED:" + language
+        undo_name = "Undo (U)" if language == "EN" else "1手戻す (U)"
+        undo_text = "ControlType.Text:No move to undo" if language == "EN" else "ControlType.Text:戻せる手がありません"
+        assert undo_text in by_name[undo_name]["uia_after"], "UIA_UNDO_SEMANTIC_STATE_NOT_OBSERVED:" + language
+        save_name = "Save (Ctrl+S)" if language == "EN" else "保存 (Ctrl+S)"
+        save_text = "ControlType.Text:Saved on this computer" if language == "EN" else "ControlType.Text:このPCに保存しました"
+        assert save_text in by_name[save_name]["uia_after"], "UIA_SAVE_SEMANTIC_STATE_NOT_OBSERVED:" + language
+    return True
+
+
+def assert_uia_receipt_fixture(results):
+    """Exercise bilingual receipt validation with synthetic data only."""
+    import copy
+    digest = hashlib.sha256(b"synthetic-uia-receipt-only").hexdigest()
+    evidence = []
+    for language in ("EN", "JP"):
+        lost = "ControlType.Text:LOST" if language == "EN" else "ControlType.Text:失敗"
+        playing = "ControlType.Text:PLAYING" if language == "EN" else "ControlType.Text:プレイ中"
+        undo_text = "ControlType.Text:No move to undo" if language == "EN" else "ControlType.Text:戻せる手がありません"
+        save_text = "ControlType.Text:Saved on this computer" if language == "EN" else "ControlType.Text:このPCに保存しました"
+        for name in BUTTONS[language]:
+            item = {
+                "language": language, "name": name, "control_type": "ControlType.Button",
+                "invoke_pattern": True, "focus": True, "invoked": True,
+                "side_effect_verified": True, "title_after": "Signal Sprint | EN",
+                "uia_before": ["ControlType.Text:MENU"], "uia_after": [],
+                "lost_uia_nodes": [],
+            }
+            if name == ("Start / Retry (R)" if language == "EN" else "開始 / 再挑戦 (R)"):
+                item["uia_before"] = [lost]
+                item["uia_after"] = [playing]
+            elif name == ("Undo (U)" if language == "EN" else "1手戻す (U)"):
+                item["uia_after"] = [undo_text]
+            elif name == ("Save (Ctrl+S)" if language == "EN" else "保存 (Ctrl+S)"):
+                item["uia_after"] = [save_text]
+            elif name == ("Load (L)" if language == "EN" else "読込 (L)"):
+                item["uia_after"] = [lost]
+                item["lost_uia_nodes"] = [lost]
+            elif name == ("日本語 (J)" if language == "EN" else "English (J)"):
+                item["title_after"] = "Signal Sprint | JP" if language == "EN" else "Signal Sprint | EN"
+            evidence.append(item)
+    valid = {
+        "schema": "signal-sprint-dynamic-uia-v1",
+        "source_head": SOURCE,
+        "executable_sha256": digest,
+        "evidence": evidence,
+        "status": "PASS",
+    }
+    assert validate_uia_receipt(valid, digest, SOURCE) is True
+    results.append({"case": "synthetic bilingual UIA receipt: exact 5 buttons, action semantics, Load LOST and Start transition", "result": "PASS_SYNTHETIC"})
+    mutations = []
+    wrong_sha = copy.deepcopy(valid)
+    wrong_sha["executable_sha256"] = "0" * 64
+    mutations.append(("wrong measured EXE SHA", wrong_sha, digest, SOURCE))
+    wrong_source = copy.deepcopy(valid)
+    wrong_source["source_head"] = HEAD
+    mutations.append(("wrong product source label", wrong_source, digest, SOURCE))
+    duplicate = copy.deepcopy(valid)
+    duplicate["evidence"][4]["name"] = duplicate["evidence"][0]["name"]
+    mutations.append(("duplicate EN button", duplicate, digest, SOURCE))
+    missing = copy.deepcopy(valid)
+    missing["evidence"].pop()
+    mutations.append(("missing JP button evidence", missing, digest, SOURCE))
+    wrong_lost = copy.deepcopy(valid)
+    wrong_lost["evidence"][8]["lost_uia_nodes"] = ["ControlType.Text:LOST"]
+    wrong_lost["evidence"][8]["uia_after"] = ["ControlType.Text:LOST"]
+    mutations.append(("wrong-language LOST token", wrong_lost, digest, SOURCE))
+    unrelated_lost = copy.deepcopy(valid)
+    en_load = next(item for item in unrelated_lost["evidence"] if item["language"] == "EN" and item["name"] == "Load (L)")
+    en_undo = next(item for item in unrelated_lost["evidence"] if item["language"] == "EN" and item["name"] == "Undo (U)")
+    en_load["lost_uia_nodes"] = []
+    en_load["uia_after"] = []
+    en_undo["lost_uia_nodes"] = ["ControlType.Text:LOST"]
+    mutations.append(("LOST on unrelated button cannot satisfy Load", unrelated_lost, digest, SOURCE))
+    no_start_lost = copy.deepcopy(valid)
+    next(item for item in no_start_lost["evidence"] if item["language"] == "JP" and item["name"] == "開始 / 再挑戦 (R)")["uia_before"] = []
+    mutations.append(("Start missing LOST precondition", no_start_lost, digest, SOURCE))
+    no_playing = copy.deepcopy(valid)
+    next(item for item in no_playing["evidence"] if item["language"] == "EN" and item["name"] == "Start / Retry (R)")["uia_after"] = []
+    mutations.append(("Start missing PLAYING state", no_playing, digest, SOURCE))
+    stale_lost = copy.deepcopy(valid)
+    next(item for item in stale_lost["evidence"] if item["language"] == "EN" and item["name"] == "Start / Retry (R)")["uia_after"] = ["ControlType.Text:PLAYING", "ControlType.Text:LOST"]
+    mutations.append(("Start still reports LOST after transition", stale_lost, digest, SOURCE))
+    no_effect = copy.deepcopy(valid)
+    next(item for item in no_effect["evidence"] if item["language"] == "JP" and item["name"] == "保存 (Ctrl+S)")["side_effect_verified"] = False
+    mutations.append(("unverified save side effect", no_effect, digest, SOURCE))
+    wrong_toggle = copy.deepcopy(valid)
+    next(item for item in wrong_toggle["evidence"] if item["language"] == "JP" and item["name"] == "English (J)")["title_after"] = "Signal Sprint | JP"
+    mutations.append(("wrong language toggle title", wrong_toggle, digest, SOURCE))
+    wrong_type = copy.deepcopy(valid)
+    wrong_type["evidence"][0]["control_type"] = "ControlType.Text"
+    mutations.append(("non-button UIA element", wrong_type, digest, SOURCE))
+    for label, candidate, expected_sha, expected_source in mutations:
+        results.append(negative("synthetic UIA receipt " + label,
+                                lambda c=candidate, s=expected_sha, p=expected_source: validate_uia_receipt(c, s, p)))
 
 
 def assert_independent_verifier_with_mock_api(results):
@@ -306,6 +447,7 @@ def run_checks(results):
         kwargs.update(update)
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
     assert_independent_verifier_with_mock_api(results)
+    assert_uia_receipt_fixture(results)
     # The proof workflow builds only an unsigned pre-GDK EXE from the immutable product source.
     build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
     for token in (
@@ -352,7 +494,8 @@ def run_checks(results):
         "revision output": "revision_included: ${{ steps.preflight.outputs.revision_included }}",
         "preflight status output": "preflight_status: ${{ steps.preflight.outputs.preflight_status }}",
         "output file binding": "GITHUB_OUTPUT",
-        "hosted dependency": "needs: cloud-revision-hold",
+        "hosted dependency": "needs: [cloud-provenance-fixture, cloud-revision-hold]",
+        "fixture result gate": "needs.cloud-provenance-fixture.result == 'success'",
         "exact dispatch head": "inputs.expected_head == github.sha",
         "revision inclusion gate": "needs.cloud-revision-hold.outputs.revision_included == 'true'",
         "current QA branch gate": "github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123'",
@@ -364,12 +507,31 @@ def run_checks(results):
         physical_header = candidate.split("  bilingual-uia:", 1)[1].split("    runs-on:", 1)[0]
         for label, token in runner_gate_tokens.items():
             section = physical_header if label in {
-                "hosted dependency", "exact dispatch head", "revision inclusion gate",
+                "hosted dependency", "fixture result gate", "exact dispatch head", "revision inclusion gate",
                 "current QA branch gate"
             } else revision_section
             assert token in section, "PHYSICAL_UIA_RUNNER_GATE_MISSING:" + label
         assert "FIXTURE_EXPECTED_REVISION_MISMATCH_NO_LONGER_PRESENT_REVIEW_FREEZE" not in revision_section, "EXPECTED_HOLD_MUST_NOT_FAIL_CLOUD_JOB"
     assert_runner_gate_contract(workflow)
+    # The dispatch SHA is untrusted user input: it must be passed via env, never interpolated into shell source.
+    def assert_cloud_exact_head_contract(candidate):
+        step = candidate.split("      - name: Assert exact-head cloud checkout", 1)[1].split("      - name:", 1)[0]
+        env_block, run_block = step.split("        run: |", 1)
+        assert "DISPATCH_EXPECTED_HEAD: ${{ inputs.expected_head }}" in env_block, "DISPATCH_HEAD_ENV_BINDING_MISSING"
+        assert '[[ "$DISPATCH_EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]' in run_block, "DISPATCH_HEAD_FORMAT_NOT_VALIDATED"
+        assert 'test "$DISPATCH_EXPECTED_HEAD" = "$EXPECTED_HEAD"' in run_block, "DISPATCH_HEAD_EXACT_MATCH_MISSING"
+        assert '${{ inputs.expected_head }}' not in run_block, "UNTRUSTED_DISPATCH_HEAD_INTERPOLATED_IN_SHELL"
+    assert_cloud_exact_head_contract(workflow)
+    for token in (
+        "DISPATCH_EXPECTED_HEAD: ${{ inputs.expected_head }}",
+        '[[ "$DISPATCH_EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]',
+        'test "$DISPATCH_EXPECTED_HEAD" = "$EXPECTED_HEAD"',
+    ):
+        changed = workflow.replace(token, "REMOVED_BY_MUTATION_TEST")
+        assert changed != workflow, "EXACT_HEAD_MUTATION_NO_EFFECT:" + token
+        results.append(negative("exact-head dispatch guard mutation reject " + token,
+                                lambda candidate=changed: assert_cloud_exact_head_contract(candidate)))
+    results.append({"case": "workflow dispatch expected-head input is env-bound and shell-injection safe", "result": "PASS_STATIC_ONLY"})
     for label, token in runner_gate_tokens.items():
         changed = workflow.replace(token, "REMOVED_BY_MUTATION_TEST")
         assert changed != workflow, "RUNNER_GATE_MUTATION_NO_EFFECT:" + label
@@ -416,6 +578,13 @@ def run_checks(results):
         "EN localized LOST token": "ControlType.Text:LOST",
         "JP localized LOST token": "ControlType.Text:失敗",
         "per-language LOST token selection": "$lostToken = if ($lang -ceq 'EN')",
+        "Load case LOST assertion": "UIA_LOAD_LOST_STATE_NOT_OBSERVED",
+        "Start LOST precondition": "UIA_START_LOST_PRECONDITION_NOT_OBSERVED",
+        "Start LOST-to-PLAYING transition": "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED",
+        "localized English PLAYING state": "ControlType.Text:PLAYING",
+        "localized Japanese PLAYING state": "ControlType.Text:プレイ中",
+        "Load case selection": "$loadName = if ($lang -ceq 'EN')",
+        "Start case selection": "$startName = if ($lang -ceq 'EN')",
         "independent build verified in UIA binding": "independent_build_verified=$true",
         "independent run and EXE binding": "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH",
         "independent build failure": "INDEPENDENT_BUILD_NOT_VERIFIED",
