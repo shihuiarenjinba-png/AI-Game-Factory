@@ -32,8 +32,9 @@ jobs:
           mkdir -p evidence
           # Preserve a terminal, fail-closed receipt even when verification exits early.
           on_verification_error() {
-            local exit_code="$1" failed_line="$2"
+            local exit_code="$1" failed_line="$2" failed_command="$3"
             export PROOF_EXIT_CODE="$exit_code" PROOF_FAILED_LINE="$failed_line"
+            export PROOF_FAILED_COMMAND="$failed_command"
             python3 - <<'PYERR'
           import json, os
           from pathlib import Path
@@ -44,20 +45,33 @@ jobs:
                   previous = json.loads(p.read_text())
               except (ValueError, OSError):
                   pass
+          reason = ''
+          reason_file = Path('evidence/verification-error.txt')
+          if reason_file.exists():
+              reason = reason_file.read_text(errors='replace')[:240].strip()
+          if not reason:
+              result_file = Path('evidence/independent-build-receipt.json')
+              if result_file.exists():
+                  try:
+                      reason = str(json.loads(result_file.read_text()).get('error') or '')[:240]
+                  except (ValueError, OSError):
+                      pass
           previous.update({
-              'schema': 'signal-sprint-cloud-build-proof-v1',
+              'schema': 'signal-sprint-cloud-build-proof-v2',
               'status': 'HOLD_INDEPENDENT_VERIFICATION_FAILED',
               'failure_exit_code': int(os.environ['PROOF_EXIT_CODE']),
               'failure_workflow_line': int(os.environ['PROOF_FAILED_LINE']),
+              'failure_reason': reason or 'COMMAND_FAILED',
+              'failure_command': os.environ.get('PROOF_FAILED_COMMAND', '').replace('\\n', ' ')[:240],
               'product_source': '1a349faa41663c417c40710140a4d50c79b62b78',
               'independent_build_verified': False,
               'physical_gui_verified': False,
               'product_acceptance': False,
           })
-          p.write_text(json.dumps(previous, indent=2) + '\n')
+          p.write_text(json.dumps(previous, indent=2) + '\\n')
           PYERR
           }
-          trap 'on_verification_error "$?" "$LINENO"' ERR
+          trap 'on_verification_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -65,7 +79,7 @@ jobs:
           if os.environ.get('BUILD_RUN_ID','').isdigit() and os.environ.get('BUILD_ARTIFACT_ID','').isdigit():
               status = 'HOLD_INDEPENDENT_VERIFICATION_INCOMPLETE'
           Path('evidence/cloud-build-proof.json').write_text(json.dumps({
-              'schema':'signal-sprint-cloud-build-proof-v1',
+              'schema':'signal-sprint-cloud-build-proof-v2',
               'status':status,
               'product_source':'1a349faa41663c417c40710140a4d50c79b62b78',
               'independent_build_verified':False,
@@ -78,25 +92,66 @@ jobs:
             exit 0
           fi
           gh api "repos/${{ github.repository }}/actions/artifacts/$BUILD_ARTIFACT_ID/zip" > /tmp/build-artifact.zip
-          test "$(stat -c%s /tmp/build-artifact.zip)" -le 1073741824 || { echo 'HOLD_ARTIFACT_ZIP_TOO_LARGE'; exit 1; }
+          artifact_size="$(stat -c%s /tmp/build-artifact.zip)"
+          if (( artifact_size > 1073741824 )); then
+            printf '%s\n' 'HOLD_ARTIFACT_ZIP_TOO_LARGE' > evidence/verification-error.txt
+            echo 'HOLD_ARTIFACT_ZIP_TOO_LARGE'
+            false
+          fi
           python3 - <<'PY'
-          import json, os, zipfile
+          import hashlib, json, os, stat, zipfile
           from pathlib import Path
-          with zipfile.ZipFile('/tmp/build-artifact.zip') as z:
-              names=z.namelist()
-              if names.count('build-receipt.json')!=1: raise SystemExit('HOLD_BUILD_RECEIPT_NOT_IN_ARTIFACT')
-              if z.getinfo('build-receipt.json').file_size > 1048576: raise SystemExit('HOLD_BUILD_RECEIPT_TOO_LARGE')
-              receipt=json.loads(z.read('build-receipt.json'))
-              member=receipt.get('artifact_exe_path')
-              if not isinstance(member,str) or names.count(member)!=1: raise SystemExit('HOLD_EXE_NOT_IN_ARTIFACT')
-              if member.startswith('/') or '..' in member.split('/') or '\\' in member: raise SystemExit('HOLD_UNSAFE_EXE_MEMBER_PATH')
-              if z.getinfo(member).file_size > 512*1024*1024: raise SystemExit('HOLD_EXE_TOO_LARGE')
-              if receipt.get('artifact_id')!=int(os.environ['BUILD_ARTIFACT_ID']): raise SystemExit('HOLD_ARTIFACT_ID_MISMATCH')
-              if receipt.get('build_run_url')!=f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{os.environ['BUILD_RUN_ID']}": raise SystemExit('HOLD_RUN_ID_MISMATCH')
-              Path('/tmp/build-receipt.json').write_text(json.dumps(receipt))
-              with z.open(member) as src, open('/tmp/signal-sprint.exe','wb') as dst:
-                  import shutil
-                  shutil.copyfileobj(src,dst,1024*1024)
+          SOURCE = '1a349faa41663c417c40710140a4d50c79b62b78'
+          MAX_EXE = 512 * 1024 * 1024
+          MAX_TOTAL = 600 * 1024 * 1024
+          def safe_member(name):
+              normalized = name[:-1] if name.endswith('/') else name
+              parts = normalized.split('/')
+              return (bool(normalized) and not name.startswith('/') and '\\' not in name
+                      and all(part not in ('', '.', '..') for part in parts)
+                      and ':' not in parts[0])
+          try:
+              with zipfile.ZipFile('/tmp/build-artifact.zip') as z:
+                  infos = z.infolist()
+                  names = [info.filename for info in infos]
+                  if len(names) != len(set(names)): raise SystemExit('HOLD_DUPLICATE_ARTIFACT_MEMBER')
+                  if not all(safe_member(name) for name in names): raise SystemExit('HOLD_UNSAFE_ARTIFACT_MEMBER_PATH')
+                  if sum(info.file_size for info in infos) > MAX_TOTAL: raise SystemExit('HOLD_ARTIFACT_UNCOMPRESSED_SIZE_LIMIT')
+                  if names.count('build-receipt.json') != 1: raise SystemExit('HOLD_BUILD_RECEIPT_NOT_IN_ARTIFACT')
+                  receipt_info = z.getinfo('build-receipt.json')
+                  receipt_mode = (receipt_info.external_attr >> 16) & 0o170000
+                  if receipt_info.is_dir() or receipt_mode not in (0, stat.S_IFREG): raise SystemExit('HOLD_BUILD_RECEIPT_NOT_REGULAR_FILE')
+                  if receipt_info.file_size > 1048576: raise SystemExit('HOLD_BUILD_RECEIPT_TOO_LARGE')
+                  receipt = json.loads(z.read(receipt_info))
+                  if not isinstance(receipt, dict): raise SystemExit('HOLD_BUILD_RECEIPT_NOT_OBJECT')
+                  if receipt.get('source_commit') != SOURCE: raise SystemExit('HOLD_BUILD_SOURCE_MISMATCH')
+                  expected_sha = receipt.get('exe_sha256')
+                  if not isinstance(expected_sha, str) or len(expected_sha) != 64 or any(ch not in '0123456789abcdefABCDEF' for ch in expected_sha): raise SystemExit('HOLD_BUILD_RECEIPT_SHA_INVALID')
+                  member = receipt.get('artifact_exe_path')
+                  if not isinstance(member, str) or not safe_member(member) or member.endswith('/') or names.count(member) != 1: raise SystemExit('HOLD_EXE_NOT_IN_ARTIFACT')
+                  info = z.getinfo(member)
+                  mode = (info.external_attr >> 16) & 0o170000
+                  if info.is_dir() or mode not in (0, stat.S_IFREG): raise SystemExit('HOLD_EXE_NOT_REGULAR_FILE')
+                  if info.file_size > MAX_EXE: raise SystemExit('HOLD_EXE_TOO_LARGE')
+                  if receipt.get('artifact_id') != int(os.environ['BUILD_ARTIFACT_ID']): raise SystemExit('HOLD_ARTIFACT_ID_MISMATCH')
+                  expected_url = f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{os.environ['BUILD_RUN_ID']}"
+                  if receipt.get('build_run_url') != expected_url: raise SystemExit('HOLD_RUN_ID_MISMATCH')
+                  digest = hashlib.sha256()
+                  total = 0
+                  with z.open(info) as src, open('/tmp/signal-sprint.exe', 'wb') as dst:
+                      while True:
+                          chunk = src.read(1024 * 1024)
+                          if not chunk: break
+                          total += len(chunk)
+                          if total > MAX_EXE: raise SystemExit('HOLD_EXE_TOO_LARGE')
+                          digest.update(chunk)
+                          dst.write(chunk)
+                  if total != info.file_size: raise SystemExit('HOLD_EXE_SIZE_MISMATCH')
+                  if digest.hexdigest().lower() != expected_sha.lower(): raise SystemExit('HOLD_ARTIFACT_EXE_SHA_MISMATCH')
+                  Path('/tmp/build-receipt.json').write_text(json.dumps(receipt))
+          except BaseException as exc:
+              Path('evidence/verification-error.txt').write_text(str(exc)[:240], encoding='utf-8')
+              raise
           PY
           python3 qa/signal_sprint_independent_build_verify.py --receipt /tmp/build-receipt.json --exe /tmp/signal-sprint.exe --output evidence/independent-build-receipt.json
           python3 - <<'PY'
