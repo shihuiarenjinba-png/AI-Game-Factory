@@ -464,67 +464,6 @@ jobs:
           echo 'COMPLETED_BUILD_ATTESTATION_FAILED'
           exit 1
 
-  gdk-package-readiness:
-    if: always()
-    needs: [cloud-provenance-fixture, completed-build-attestation]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      WINDOWS_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
-      INDEPENDENT_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
-      BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
-      BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
-      BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
-      PRODUCT_SOURCE_SHA: 1a349faa41663c417c40710140a4d50c79b62b78
-      PR30_SOURCE_SHA: a377043d3c9ab0c71d9a100cdb841dd7000313b9
-      WORKFLOW_HEAD_SHA: ${{ github.sha }}
-    steps:
-      - name: Checkout exact UIA workflow head and full source lineage
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          path: factory
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Checkout exact Provisioner PR53 contract as data only
-        uses: actions/checkout@v4
-        with:
-          repository: shihuiarenjinba-png/Repository-Provisioner-game
-          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
-          path: provisioner
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Download completed-build attestation from this exact UIA run
-        if: always()
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: signal-sprint-completed-build-attestation
-          path: evidence/attestation
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Run GDK package-readiness contract tests
-        shell: bash
-        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
-      - name: Generate GDK readiness only from completed-build attestation
-        if: always()
-        shell: bash
-        run: |
-          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
-            --provisioner-checkout provisioner \
-            --factory-checkout factory \
-            --completed-build-attestation evidence/attestation/completed-build-attestation.json \
-            --output evidence/gdk-package-readiness.json
-      - name: Upload completed-run GDK package-readiness receipt
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: signal-sprint-gdk-package-readiness
-          path: evidence/gdk-package-readiness.json
-          if-no-files-found: error
-          retention-days: 30
-
   bilingual-uia:
     needs: [cloud-provenance-fixture, cloud-revision-hold, completed-build-attestation]
     if: >-
@@ -760,4 +699,65 @@ jobs:
           name: signal-sprint-uia-receipt
           path: evidence/
           if-no-files-found: warn
+          retention-days: 30
+
+  gdk-package-readiness:
+    if: always()
+    needs: [cloud-provenance-fixture, completed-build-attestation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      INDEPENDENT_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      PRODUCT_SOURCE_SHA: 1a349faa41663c417c40710140a4d50c79b62b78
+      PR30_SOURCE_SHA: a377043d3c9ab0c71d9a100cdb841dd7000313b9
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact UIA workflow head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact Provisioner PR53 contract as data only
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: provisioner
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download completed-build attestation from this exact UIA run
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/attestation
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run GDK package-readiness contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
+      - name: Generate GDK readiness only from completed-build attestation
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
+            --provisioner-checkout provisioner \
+            --factory-checkout factory \
+            --completed-build-attestation evidence/attestation/completed-build-attestation.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload completed-run GDK package-readiness receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
+          if-no-files-found: error
           retention-days: 30
