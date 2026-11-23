@@ -6,6 +6,7 @@ import pathlib
 import re
 import sys
 import traceback
+import zipfile
 from urllib.parse import urlsplit
 
 REPO = "shihuiarenjinba-png/AI-Game-Factory"
@@ -35,15 +36,17 @@ def validate(receipt, exe, expected_sha, expected_source):
 def negative(label, fn):
     try:
         fn()
-    except (AssertionError, ValueError, KeyError):
+    except (AssertionError, ValueError, KeyError, OSError, RuntimeError, EOFError, zipfile.BadZipFile):
         return {"case": label, "result": "PASS_REJECTED"}
     raise AssertionError("NEGATIVE_ACCEPTED:" + label)
 
 def assert_gate_contract(gate):
-    for language in ("EN", "JP"):
-        assert len(BUTTONS[language]) == len(set(BUTTONS[language])) == 5
-        for name in BUTTONS[language]:
-            assert "'" + name + "'" in gate, "UIA_BUTTON_CONTRACT_MISSING:" + language + ":" + name
+    match = re.search(r"\$expected\s*=\s*@\{\s*EN\s*=\s*@\((.*?)\)\s*JP\s*=\s*@\((.*?)\)\s*\}", gate, re.S)
+    assert match is not None, "UIA_EXPECTED_BUTTON_MAP_MISSING"
+    for language, group in (("EN", 1), ("JP", 2)):
+        actual = re.findall(r"'([^']*)'", match.group(group))
+        assert actual == BUTTONS[language], "UIA_BUTTON_SET_OR_ORDER_DRIFT:" + language
+        assert len(actual) == len(set(actual)) == 5, "UIA_BUTTON_DUPLICATE_OR_COUNT:" + language
         assert LOST[language] in gate, "UIA_LOST_LABEL_MISSING:" + language
 
 
@@ -66,11 +69,14 @@ def assert_independent_verifier_with_mock_api(results):
            "status": "completed", "conclusion": "success", "head_sha": SOURCE}
     artifact = {"id": artifact_id, "expired": False,
                 "workflow_run": {"id": run_id, "head_sha": SOURCE}}
-    def archive_for(data):
+    def archive_with_entries(entries):
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w") as z:
-            z.writestr(member, data)
+            for name, data in entries:
+                z.writestr(name, data)
         return output.getvalue()
+    def archive_for(data):
+        return archive_with_entries([(member, data)])
     archive = archive_for(exe)
     def make_fetch(run_obj, artifact_obj, zip_bytes):
         def fetch(url, token, accept="application/vnd.github+json"):
@@ -101,12 +107,29 @@ def assert_independent_verifier_with_mock_api(results):
             ("wrong run repository", receipt, {**run, "repository": {"full_name": "other/repo"}}, artifact, archive, exe),
             ("wrong artifact id", {**receipt, "artifact_id": artifact_id + 1}, run, artifact, archive, exe),
             ("missing artifact path", {**receipt, "artifact_exe_path": "missing.exe"}, run, artifact, archive, exe),
+            ("unsafe artifact traversal path", {**receipt, "artifact_exe_path": "../SignalSprint.exe"}, run, artifact, archive, exe),
+            ("absolute artifact path", {**receipt, "artifact_exe_path": "/build/SignalSprint.exe"}, run, artifact, archive, exe),
+            ("Windows artifact path", {**receipt, "artifact_exe_path": "build\\\\SignalSprint.exe"}, run, artifact, archive, exe),
+            ("duplicate artifact member", receipt, run, artifact, archive_with_entries([(member, exe), (member, exe)]), exe),
+            ("corrupt artifact ZIP", receipt, run, artifact, b"not-a-valid-zip", exe),
         ]
         for label, candidate, run_obj, art_obj, zipped, local in mutations:
             exe_path.write_bytes(local)
             results.append(negative("mock API " + label, lambda c=candidate, r=run_obj, a=art_obj, z=zipped:
                 module.verify(c, exe_path, "mock-token", fetch=make_fetch(r, a, z))))
         exe_path.write_bytes(exe)
+        for attribute, limit, label in (
+            ("MAX_ARTIFACT_ZIP_BYTES", len(archive) - 1, "artifact ZIP size limit"),
+            ("MAX_ARTIFACT_UNCOMPRESSED_BYTES", len(exe) - 1, "artifact uncompressed size limit"),
+            ("MAX_EXE_BYTES", len(exe) - 1, "EXE size limit"),
+        ):
+            original = getattr(module, attribute)
+            setattr(module, attribute, limit)
+            try:
+                results.append(negative("mock API " + label, lambda: module.verify(
+                    receipt, exe_path, "mock-token", fetch=make_fetch(run, artifact, archive))))
+            finally:
+                setattr(module, attribute, original)
 
 def run_checks(results):
     exe = b"synthetic-fixture-only-not-a-shipping-executable"
@@ -193,6 +216,9 @@ def run_checks(results):
         "per-language semantic side effects": "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE",
         "exact button set and duplicate rejection": "UIA_BUTTON_EXACT_SET_OR_DUPLICATE",
         "localized LOST nodes": "UIA_LOCALIZED_LOST_NOT_OBSERVED",
+        "EN localized LOST token": "ControlType.Text:LOST",
+        "JP localized LOST token": "ControlType.Text:失敗",
+        "per-language LOST token selection": "$lostToken = if ($lang -ceq 'EN')",
         "independent build verified in UIA binding": "independent_build_verified=$true",
         "independent run and EXE binding": "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH",
         "independent build failure": "INDEPENDENT_BUILD_NOT_VERIFIED",
@@ -219,11 +245,34 @@ def run_checks(results):
     for token in ("RUN_NOT_SUCCESS", "RUN_SOURCE_MISMATCH", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_SOURCE_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
+    cloud_build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
+    cloud_failure_guards = (
+        "failure_reason", "failure_command", "HOLD_ARTIFACT_ZIP_TOO_LARGE",
+        "HOLD_DUPLICATE_ARTIFACT_MEMBER", "HOLD_UNSAFE_ARTIFACT_MEMBER_PATH",
+        "HOLD_ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "HOLD_EXE_NOT_REGULAR_FILE",
+    )
+    for token in cloud_failure_guards:
+        assert token in cloud_build_workflow, "CLOUD_BUILD_GUARD_MISSING:" + token
+        changed = cloud_build_workflow.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
+        assert changed != cloud_build_workflow, "CLOUD_BUILD_MUTATION_NO_EFFECT:" + token
+        results.append(negative("cloud build workflow mutation reject " + token,
+                                lambda candidate=changed: assert all(
+                                    required in candidate for required in cloud_failure_guards)))
     # Check the real UIA gate source, not only self-declared fixture constants.
     gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
     assert_gate_contract(gate)
-    for language in ("EN", "JP"):
-        results.append({"case": language + " 5-button/LOST source contract", "result": "PASS_STATIC_ONLY"})
+    expected_map = re.search(r"\$expected\s*=\s*@\{\s*EN\s*=\s*@\((.*?)\)\s*JP\s*=\s*@\((.*?)\)\s*\}", gate, re.S)
+    for language, group in (("EN", 1), ("JP", 2)):
+        block = expected_map.group(group)
+        for variant, changed_block in (
+            ("extra button", block + ", 'Unexpected (X)'"),
+            ("duplicate button", block + ", '" + BUTTONS[language][0] + "'"),
+            ("missing button", block.replace("'" + BUTTONS[language][-1] + "'", "", 1)),
+        ):
+            mutated = gate[:expected_map.start(group)] + changed_block + gate[expected_map.end(group):]
+            results.append(negative(language + " exact-set mutation reject " + variant,
+                                    lambda candidate=mutated: assert_gate_contract(candidate)))
+        results.append({"case": language + " exact 5-button/LOST source contract", "result": "PASS_STATIC_ONLY"})
     # Each mutation must make the complete contract validator fail, not just
     # reduce the number of occurrences of a string.
     for language in ("EN", "JP"):
@@ -263,7 +312,9 @@ def main():
             "actions_run_id": os.environ.get("ACTIONS_RUN_ID"),
             "fixture_source_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
             "uia_gate_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v2",
+            "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
+            "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
+            "schema": "signal-sprint-cloud-fixture-v3",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
