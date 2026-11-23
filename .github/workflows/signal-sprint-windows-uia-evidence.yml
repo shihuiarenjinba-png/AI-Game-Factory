@@ -528,11 +528,14 @@ jobs:
           if ($null -eq $receipt.artifact_id) { throw 'BUILD_ARTIFACT_ID_INVALID' }
           try { $buildArtifactId = [long]$receipt.artifact_id } catch { throw 'BUILD_ARTIFACT_ID_INVALID' }
           if ($buildArtifactId -le 0) { throw 'BUILD_ARTIFACT_ID_INVALID' }
+          $exeSize = (Get-Item -LiteralPath $env:EXE_PATH).Length
+          if ($exeSize -le 0) { throw 'EXE_SIZE_INVALID' }
           [pscustomobject]@{
             workflow_head=$head
             product_source=$productSource
             pr30_source=$pr30
             exe_sha256=$actual
+            exe_size_bytes=$exeSize
             build_receipt_sha256=$receiptFileSha
             build_run_url=$receipt.build_run_url
             build_run_id=$buildRunId
@@ -570,6 +573,9 @@ jobs:
           if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
           if ([string]$build.workflow_head_sha -cne [string]$preflight.build_workflow_head_sha -or [string]$build.workflow_head_sha -cne [string]$preflight.workflow_head) { throw 'INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH' }
           if ([long]$build.run_id -ne [long]$preflight.build_run_id -or [long]$build.artifact_id -ne [long]$preflight.build_artifact_id) { throw 'INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH' }
+          if ([string]$build.build_run_url -cne [string]$preflight.build_run_url) { throw 'INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH' }
+          if ([long]$build.exe_size_bytes -ne [long]$preflight.exe_size_bytes -or [long]$build.artifact_exe_size_bytes -ne [long]$preflight.exe_size_bytes) { throw 'INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH' }
+          if ([string]$build.artifact_zip_sha256 -cnotmatch '^[a-f0-9]{64}$' -or [long]$build.artifact_zip_size_bytes -le 0) { throw 'INDEPENDENT_BUILD_ARTIFACT_DIGEST_INVALID' }
           if ($build.pr30_source_commit -cne $preflight.pr30_source) { throw 'INDEPENDENT_BUILD_PR30_BINDING_MISMATCH' }
           if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
           if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
@@ -635,6 +641,11 @@ jobs:
             schema='signal-sprint-uia-hash-binding-v1'
             status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
             exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            exe_size_bytes=$build.exe_size_bytes
+            artifact_exe_size_bytes=$build.artifact_exe_size_bytes
+            artifact_zip_sha256=$build.artifact_zip_sha256
+            artifact_zip_size_bytes=$build.artifact_zip_size_bytes
+            build_run_url=$build.build_run_url
             build_receipt_sha256=$preflight.build_receipt_sha256
             product_source=$preflight.product_source
             workflow_head=$preflight.workflow_head

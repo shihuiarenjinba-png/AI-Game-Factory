@@ -230,6 +230,7 @@ def verify(receipt, exe_path, token, fetch=get, require_completed_run=False, exp
             "status": "PASS_INDEPENDENT_BUILD_ONLY", "product_source": SOURCE,
             "pr30_source_commit": PR30_SOURCE, "pr30_ancestry_verified": True,
             "run_id": run_id, "artifact_id": artifact_id,
+            "build_run_url": receipt["build_run_url"],
             "build_job_name": BUILD_JOB_NAME, "run_status_at_verification": run.get("status"),
             "run_conclusion": run.get("conclusion"),
             "completed_run_required": require_completed_run,

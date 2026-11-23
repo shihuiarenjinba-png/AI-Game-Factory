@@ -55,6 +55,8 @@ def assert_gate_contract(gate):
         "START_UIA_CASE_NOT_UNIQUE",
         "START_LOST_PRECONDITION_NOT_OBSERVED",
         "START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED",
+        "START_PRECONDITION_LOST_NOT_OBSERVED",
+        "LOST|失敗",
         "ControlType.Text:PLAYING",
         "ControlType.Text:プレイ中",
     ):
@@ -106,28 +108,65 @@ def validate_uia_receipt(receipt, expected_exe_sha, expected_source):
 
 
 def validate_independent_build_binding(build, preflight):
-    """Bind independent build receipt to exact UIA head, run, artifact, source and measured EXE."""
+    """Bind independently verified run/artifact/EXE evidence to the exact physical-UIA preflight."""
     assert isinstance(build, dict) and isinstance(preflight, dict), "INDEPENDENT_BUILD_BINDING_NOT_OBJECT"
     assert build.get("status") == "PASS_INDEPENDENT_BUILD_ONLY", "INDEPENDENT_BUILD_NOT_VERIFIED"
     assert build.get("independent_build_verified") is True, "INDEPENDENT_BUILD_NOT_VERIFIED"
     assert build.get("completed_run_required") is True, "INDEPENDENT_BUILD_RUN_NOT_COMPLETED_ATTESTED"
     assert build.get("run_status_at_verification") == "completed" and build.get("run_conclusion") == "success", "INDEPENDENT_BUILD_RUN_NOT_COMPLETED_SUCCESS"
-    assert preflight.get("build_workflow_head_sha") == preflight.get("workflow_head"), "BUILD_WORKFLOW_HEAD_MISMATCH"
-    assert build.get("workflow_head_sha") == preflight.get("build_workflow_head_sha"), "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH"
-    assert build.get("run_id") == preflight.get("build_run_id"), "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
-    assert build.get("artifact_id") == preflight.get("build_artifact_id"), "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
-    assert build.get("product_source") == preflight.get("product_source"), "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
-    assert build.get("pr30_source_commit") == preflight.get("pr30_source"), "INDEPENDENT_BUILD_PR30_BINDING_MISMATCH"
+
+    workflow_head = preflight.get("workflow_head")
+    build_workflow_head = preflight.get("build_workflow_head_sha")
+    assert isinstance(workflow_head, str) and re.fullmatch(r"[a-f0-9]{40}", workflow_head), "UIA_WORKFLOW_HEAD_INVALID"
+    assert build_workflow_head == workflow_head, "BUILD_WORKFLOW_HEAD_MISMATCH"
+    assert build.get("workflow_head_sha") == workflow_head, "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH"
+
+    assert preflight.get("product_source") == SOURCE, "UIA_PREFLIGHT_PRODUCT_SOURCE_MISMATCH"
+    assert build.get("product_source") == SOURCE, "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
+    assert preflight.get("pr30_source") == PR30_SOURCE, "UIA_PREFLIGHT_PR30_SOURCE_MISMATCH"
+    assert build.get("pr30_source_commit") == PR30_SOURCE, "INDEPENDENT_BUILD_PR30_BINDING_MISMATCH"
+
+    run_id = preflight.get("build_run_id")
+    build_run_id = build.get("run_id")
+    artifact_id = preflight.get("build_artifact_id")
+    build_artifact_id = build.get("artifact_id")
+    assert type(run_id) is int and run_id > 0 and type(build_run_id) is int and build_run_id > 0, "INDEPENDENT_BUILD_RUN_ID_INVALID"
+    assert type(artifact_id) is int and artifact_id > 0 and type(build_artifact_id) is int and build_artifact_id > 0, "INDEPENDENT_BUILD_ARTIFACT_ID_INVALID"
+    assert build_run_id == run_id and build_artifact_id == artifact_id, "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
+
+    run_url = build.get("build_run_url")
+    preflight_run_url = preflight.get("build_run_url")
+    run_match = re.fullmatch(rf"https://github\\.com/{re.escape(REPO)}/actions/runs/([1-9][0-9]*)", str(run_url or ""))
+    assert run_match is not None, "INDEPENDENT_BUILD_RUN_URL_INVALID"
+    assert preflight_run_url == run_url and int(run_match.group(1)) == run_id, "INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH"
+
     build_sha = build.get("exe_sha256")
     preflight_sha = preflight.get("exe_sha256")
-    assert isinstance(build_sha, str) and isinstance(preflight_sha, str) and build_sha.lower() == preflight_sha.lower(), "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
+    assert isinstance(build_sha, str) and re.fullmatch(r"[a-fA-F0-9]{64}", build_sha), "INDEPENDENT_BUILD_EXE_SHA_INVALID"
+    assert isinstance(preflight_sha, str) and re.fullmatch(r"[a-fA-F0-9]{64}", preflight_sha), "UIA_PREFLIGHT_EXE_SHA_INVALID"
+    assert build_sha.lower() == preflight_sha.lower(), "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
+
+    exe_size = build.get("exe_size_bytes")
+    preflight_size = preflight.get("exe_size_bytes")
+    artifact_exe_size = build.get("artifact_exe_size_bytes")
+    assert type(exe_size) is int and exe_size > 0 and type(preflight_size) is int and preflight_size > 0, "INDEPENDENT_BUILD_EXE_SIZE_INVALID"
+    assert type(artifact_exe_size) is int and artifact_exe_size > 0, "INDEPENDENT_BUILD_ARTIFACT_EXE_SIZE_INVALID"
+    assert exe_size == preflight_size == artifact_exe_size, "INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH"
+
+    archive_sha = build.get("artifact_zip_sha256")
+    archive_size = build.get("artifact_zip_size_bytes")
+    assert isinstance(archive_sha, str) and re.fullmatch(r"[a-f0-9]{64}", archive_sha), "INDEPENDENT_BUILD_ARTIFACT_ZIP_SHA_INVALID"
+    assert type(archive_size) is int and archive_size > 0, "INDEPENDENT_BUILD_ARTIFACT_ZIP_SIZE_INVALID"
     return True
 
 
 def assert_independent_build_binding_fixture(results):
     """Exercise exact-head/run/artifact/source/SHA binding with synthetic receipts only."""
     import copy
-    digest = hashlib.sha256(b"synthetic-independent-build-binding-only").hexdigest()
+    synthetic_exe = b"synthetic-independent-build-binding-only"
+    digest = hashlib.sha256(synthetic_exe).hexdigest()
+    archive_bytes = b"synthetic-independent-artifact-zip"
+    archive_digest = hashlib.sha256(archive_bytes).hexdigest()
     workflow_head = "c" * 40
     run_id, artifact_id = 123456, 789012
     preflight = {
@@ -136,6 +175,8 @@ def assert_independent_build_binding_fixture(results):
         "product_source": SOURCE,
         "pr30_source": PR30_SOURCE,
         "exe_sha256": digest,
+        "exe_size_bytes": len(synthetic_exe),
+        "build_run_url": f"https://github.com/{REPO}/actions/runs/{run_id}",
         "build_run_id": run_id,
         "build_artifact_id": artifact_id,
     }
@@ -151,6 +192,11 @@ def assert_independent_build_binding_fixture(results):
         "product_source": SOURCE,
         "pr30_source_commit": PR30_SOURCE,
         "exe_sha256": digest,
+        "exe_size_bytes": len(synthetic_exe),
+        "artifact_exe_size_bytes": len(synthetic_exe),
+        "artifact_zip_sha256": archive_digest,
+        "artifact_zip_size_bytes": len(archive_bytes),
+        "build_run_url": f"https://github.com/{REPO}/actions/runs/{run_id}",
     }
     assert validate_independent_build_binding(build, preflight) is True
     results.append({"case": "synthetic independent build bound to exact UIA head, run, artifact, source and EXE SHA", "result": "PASS_SYNTHETIC"})
@@ -176,6 +222,43 @@ def assert_independent_build_binding_fixture(results):
     wrong_sha = copy.deepcopy(build)
     wrong_sha["exe_sha256"] = "0" * 64
     mutations.append(("wrong independently measured EXE SHA", wrong_sha, preflight))
+    wrong_preflight_source = copy.deepcopy(preflight)
+    wrong_preflight_source["product_source"] = HEAD
+    mutations.append(("wrong preflight frozen product source", build, wrong_preflight_source))
+    wrong_preflight_pr30 = copy.deepcopy(preflight)
+    wrong_preflight_pr30["pr30_source"] = SOURCE
+    mutations.append(("wrong preflight PR30 source", build, wrong_preflight_pr30))
+    malformed_equal_head = copy.deepcopy(build)
+    malformed_equal_head["workflow_head_sha"] = "z" * 40
+    malformed_equal_head_preflight = copy.deepcopy(preflight)
+    malformed_equal_head_preflight["workflow_head"] = "z" * 40
+    malformed_equal_head_preflight["build_workflow_head_sha"] = "z" * 40
+    mutations.append(("malformed but mutually equal workflow heads", malformed_equal_head, malformed_equal_head_preflight))
+    malformed_equal_sha = copy.deepcopy(build)
+    malformed_equal_sha["exe_sha256"] = "g" * 64
+    malformed_equal_sha_preflight = copy.deepcopy(preflight)
+    malformed_equal_sha_preflight["exe_sha256"] = "g" * 64
+    mutations.append(("malformed but mutually equal EXE SHA values", malformed_equal_sha, malformed_equal_sha_preflight))
+    wrong_run_url = copy.deepcopy(build)
+    wrong_run_url["build_run_url"] = f"https://github.com/{REPO}/actions/runs/{run_id + 1}"
+    mutations.append(("build run URL does not identify receipt run", wrong_run_url, preflight))
+    wrong_preflight_run_url = copy.deepcopy(preflight)
+    wrong_preflight_run_url["build_run_url"] = f"https://github.com/{REPO}/actions/runs/{run_id + 1}"
+    mutations.append(("preflight run URL differs from verified build", build, wrong_preflight_run_url))
+    wrong_exe_size = copy.deepcopy(build)
+    wrong_exe_size["exe_size_bytes"] += 1
+    mutations.append(("EXE byte size mismatch", wrong_exe_size, preflight))
+    wrong_artifact_exe_size = copy.deepcopy(build)
+    wrong_artifact_exe_size["artifact_exe_size_bytes"] += 1
+    mutations.append(("artifact member byte size mismatch", wrong_artifact_exe_size, preflight))
+    boolean_run_id = copy.deepcopy(build)
+    boolean_run_id["run_id"] = True
+    boolean_run_preflight = copy.deepcopy(preflight)
+    boolean_run_preflight["build_run_id"] = True
+    mutations.append(("boolean values cannot masquerade as run IDs", boolean_run_id, boolean_run_preflight))
+    malformed_archive_sha = copy.deepcopy(build)
+    malformed_archive_sha["artifact_zip_sha256"] = "g" * 64
+    mutations.append(("malformed artifact ZIP SHA256", malformed_archive_sha, preflight))
     not_verified = copy.deepcopy(build)
     not_verified["independent_build_verified"] = False
     mutations.append(("independent build not verified", not_verified, preflight))
@@ -432,6 +515,9 @@ def assert_independent_verifier_with_mock_api(results):
         assert completed_good["run_status_at_verification"] == "completed"
         assert completed_good["run_conclusion"] == "success"
         assert completed_good["completed_run_required"] is True
+        assert completed_good["build_run_url"] == url
+        assert completed_good["exe_size_bytes"] == len(exe)
+        assert completed_good["artifact_exe_size_bytes"] == len(exe)
         results.append({"case": "strict UIA provenance accepts only completed successful exact-run/exact-head build", "result": "PASS_SYNTHETIC"})
         results.append(negative(
             "strict UIA provenance rejects wrong expected build run ID",
