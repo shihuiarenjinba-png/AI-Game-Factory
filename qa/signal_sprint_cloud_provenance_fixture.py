@@ -136,7 +136,7 @@ def validate_independent_build_binding(build, preflight):
 
     run_url = build.get("build_run_url")
     preflight_run_url = preflight.get("build_run_url")
-    run_match = re.fullmatch(rf"https://github\\.com/{re.escape(REPO)}/actions/runs/([1-9][0-9]*)", str(run_url or ""))
+    run_match = re.fullmatch(rf"https://github\.com/{re.escape(REPO)}/actions/runs/([1-9][0-9]*)", str(run_url or ""))
     assert run_match is not None, "INDEPENDENT_BUILD_RUN_URL_INVALID"
     assert preflight_run_url == run_url and int(run_match.group(1)) == run_id, "INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH"
 
