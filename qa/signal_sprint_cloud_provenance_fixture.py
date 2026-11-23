@@ -101,14 +101,22 @@ def assert_independent_verifier_with_mock_api(results):
             (provenance_member, json.dumps(value).encode("utf-8")),
         ])
     archive = archive_for(exe)
-    def make_fetch(run_obj, artifact_obj, zip_bytes):
+    def make_fetch(run_obj, artifact_obj, zip_bytes, digest_override=None, include_digest=True):
+        artifact_payload = dict(artifact_obj)
+        if include_digest:
+            artifact_payload["digest"] = (
+                digest_override if digest_override is not None
+                else "sha256:" + hashlib.sha256(zip_bytes).hexdigest()
+            )
+        else:
+            artifact_payload.pop("digest", None)
         def fetch(url, token, accept="application/vnd.github+json"):
             if url == f"{module.API}/actions/runs/{run_id}":
                 return json.dumps(run_obj).encode()
             if url == f"{module.API}/actions/runs/{run_id}/jobs?per_page=100":
                 return json.dumps(run_obj.get("_mock_jobs", jobs)).encode()
             if url == f"{module.API}/actions/artifacts/{artifact_id}":
-                return json.dumps(artifact_obj).encode()
+                return json.dumps(artifact_payload).encode()
             if url == f"{module.API}/actions/artifacts/{artifact_id}/zip":
                 return zip_bytes
             raise AssertionError("UNEXPECTED_API_URL")
@@ -120,12 +128,24 @@ def assert_independent_verifier_with_mock_api(results):
         good = module.verify(receipt, exe_path, "mock-token", fetch=fetch)
         assert good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
         assert good["exe_sha256"] == sha and good["physical_gui_verified"] is False
+        assert good["artifact_zip_sha256"] == hashlib.sha256(archive).hexdigest()
+        assert good["artifact_zip_size_bytes"] == len(archive)
+        assert good["exe_size_bytes"] == len(exe)
         assert good["build_provenance_verified"] is True
         assert good["build_job_name"] == module.BUILD_JOB_NAME
         assert good["run_status_at_verification"] == "in_progress"
         assert good["artifact_kind"] == "EXE_QA_UNSIGNED" and good["msix_status"] == "NOT_BUILT"
         assert good["gdk_package_verified"] is False
         results.append({"case": "mock API exact workflow, source receipt and unsigned EXE positive", "result": "PASS_SYNTHETIC"})
+        results.append(negative("mock API missing artifact digest", lambda: module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive, include_digest=False))))
+        results.append(negative("mock API malformed artifact digest", lambda: module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive, digest_override="sha256:not-a-sha"))))
+        results.append(negative("mock API artifact digest mismatch", lambda: module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive, digest_override="sha256:" + "0" * 64))))
         from urllib.request import Request
         handler = module.SafeRedirectHandler()
         request = Request("https://api.github.com/repos/" + REPO + "/actions/artifacts/1/zip",
@@ -342,7 +362,7 @@ def run_checks(results):
     assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
     assert "actions: read" in workflow, "GITHUB_ACTIONS_READ_PERMISSION_MISSING"
     verifier = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_MISSING_OR_DUPLICATE", "ARTIFACT_PROVENANCE_NOT_REGULAR_FILE", "ARTIFACT_PROVENANCE_TOO_LARGE", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID", "url.endswith(\"/zip\")", "application/vnd.github+json", "SafeRedirectHandler", "redirected.remove_header(name)", "Authorization", "HTTP_ERROR_", "ARTIFACT_DUPLICATE_MEMBER", "ARTIFACT_UNSAFE_MEMBER_PATH", "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "ARTIFACT_MEMBER_NOT_REGULAR_FILE", "ARTIFACT_EXE_TOO_LARGE", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
+    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_MISSING_OR_DUPLICATE", "ARTIFACT_PROVENANCE_NOT_REGULAR_FILE", "ARTIFACT_PROVENANCE_TOO_LARGE", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID", "ARTIFACT_DIGEST_INVALID", "ARTIFACT_ARCHIVE_DIGEST_MISMATCH", "LOCAL_EXE_SIZE_MISMATCH", "artifact_zip_sha256", "url.endswith(\"/zip\")", "application/vnd.github+json", "SafeRedirectHandler", "redirected.remove_header(name)", "Authorization", "HTTP_ERROR_", "ARTIFACT_DUPLICATE_MEMBER", "ARTIFACT_UNSAFE_MEMBER_PATH", "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "ARTIFACT_MEMBER_NOT_REGULAR_FILE", "ARTIFACT_EXE_TOO_LARGE", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     cloud_build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
