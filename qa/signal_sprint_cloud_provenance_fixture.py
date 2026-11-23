@@ -334,7 +334,7 @@ def run_checks(results):
         "failure_reason", "failure_command", "HOLD_FROZEN_SOURCE_EXE_BUILD_FAILED",
         "HOLD_INDEPENDENT_VERIFICATION_FAILED", "HOLD_INDEPENDENT_VERIFICATION_INCOMPLETE",
         "HOLD_ARTIFACT_DOWNLOAD_FAILED", "windows-frozen-source-exe:",
-        "actions/download-artifact@v4", "artifact-id", "build-provenance.json",
+        "actions/download-artifact@v4", "artifact-id", "merge-multiple: true", "build-provenance.json",
         "workflow_head_sha", "artifact_provenance_path", "if: always()",
     )
     def assert_cloud_build_contract(candidate):
