@@ -102,7 +102,21 @@ def safe_zip_member(name):
     )
 
 
-def verify(receipt, exe_path, token, fetch=get):
+def validate_run_status(run, require_completed_run=False):
+    require(isinstance(run, dict), "RUN_NOT_OBJECT")
+    status = run.get("status")
+    if require_completed_run:
+        require(status == "completed" and run.get("conclusion") == "success",
+                "RUN_NOT_COMPLETED_SUCCESS")
+        return
+    # The verifier also runs inside the build workflow itself, where the parent
+    # run is necessarily in_progress. A queued run cannot have a completed build job.
+    require(status in ("in_progress", "completed"), "RUN_NOT_ACTIVE_OR_COMPLETE")
+    if status == "completed":
+        require(run.get("conclusion") == "success", "RUN_NOT_SUCCESS")
+
+
+def verify(receipt, exe_path, token, fetch=get, require_completed_run=False):
     require(isinstance(receipt, dict), "RECEIPT_NOT_OBJECT")
     require(receipt.get("source_commit") == SOURCE, "BUILD_SOURCE_MISMATCH")
     require(receipt.get("pr30_source_commit") == PR30_SOURCE, "PR30_SOURCE_RECEIPT_MISMATCH")
@@ -142,9 +156,7 @@ def verify(receipt, exe_path, token, fetch=get):
     require(isinstance(workflow_head_sha, str) and bool(re.fullmatch(r"[0-9a-f]{40}", workflow_head_sha)), "WORKFLOW_HEAD_SHA_INVALID")
     require(run.get("head_sha") == workflow_head_sha, "WORKFLOW_HEAD_MISMATCH")
     require(run.get("id") == run_id and run.get("repository", {}).get("full_name") == REPO, "RUN_ID_OR_REPO_MISMATCH")
-    require(run.get("status") in ("queued", "in_progress", "completed"), "RUN_NOT_ACTIVE_OR_COMPLETE")
-    if run.get("status") == "completed":
-        require(run.get("conclusion") == "success", "RUN_NOT_SUCCESS")
+    validate_run_status(run, require_completed_run=require_completed_run)
     jobs_payload = json.loads(fetch(f"{API}/actions/runs/{run_id}/jobs?per_page=100", token))
     jobs = jobs_payload.get("jobs")
     require(isinstance(jobs, list), "RUN_JOBS_INVALID")
@@ -208,6 +220,8 @@ def verify(receipt, exe_path, token, fetch=get):
             "pr30_source_commit": PR30_SOURCE, "pr30_ancestry_verified": True,
             "run_id": run_id, "artifact_id": artifact_id,
             "build_job_name": BUILD_JOB_NAME, "run_status_at_verification": run.get("status"),
+            "run_conclusion": run.get("conclusion"),
+            "completed_run_required": require_completed_run,
             "artifact_exe_path": member, "artifact_provenance_path": provenance_member,
             "artifact_zip_sha256": archive_sha256, "artifact_zip_size_bytes": len(archive),
             "exe_size_bytes": local_size, "artifact_exe_size_bytes": artifact_size,
@@ -222,6 +236,8 @@ def main():
     parser.add_argument("--receipt", required=True)
     parser.add_argument("--exe", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--require-completed-run", action="store_true",
+                        help="Require the referenced build workflow run to be completed with success.")
     args = parser.parse_args()
     result = {"schema": "signal-sprint-independent-build-v1", "status": "FAIL",
               "independent_build_verified": False, "physical_gui_verified": False}
@@ -229,7 +245,8 @@ def main():
         token = os.environ.get("GITHUB_TOKEN", "")
         require(bool(token), "GITHUB_TOKEN_MISSING")
         receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8-sig"))
-        result = verify(receipt, args.exe, token)
+        result = verify(receipt, args.exe, token,
+                        require_completed_run=args.require_completed_run)
     except Exception as exc:
         result["error"] = type(exc).__name__ + ": " + str(exc)
     out = Path(args.output)

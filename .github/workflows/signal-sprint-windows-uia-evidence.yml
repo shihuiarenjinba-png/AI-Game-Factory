@@ -238,7 +238,7 @@ jobs:
           EXE_PATH: ${{ inputs.exe_path }}
           BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
         run: |
-          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json --require-completed-run
           if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
       - name: Run JA and EN UIA gate
         shell: pwsh

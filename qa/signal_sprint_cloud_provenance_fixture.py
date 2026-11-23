@@ -409,10 +409,23 @@ def assert_independent_verifier_with_mock_api(results):
             "https://api.github.com/repos/" + REPO + "/actions/artifacts/1/zip")
         assert same_host.get_header("Authorization") == "Bearer fixture-token"
         results.append({"case": "cross-origin artifact redirect strips GitHub bearer token", "result": "PASS_SYNTHETIC"})
-        queued_good = module.verify(receipt, exe_path, "mock-token",
-                                    fetch=make_fetch({**run, "status": "queued"}, artifact, archive))
-        assert queued_good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
-        results.append({"case": "queued overall run with completed Windows build job is accepted", "result": "PASS_SYNTHETIC"})
+        completed_good = module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch({**run, "status": "completed", "conclusion": "success"}, artifact, archive),
+            require_completed_run=True)
+        assert completed_good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
+        assert completed_good["run_status_at_verification"] == "completed"
+        assert completed_good["run_conclusion"] == "success"
+        assert completed_good["completed_run_required"] is True
+        results.append({"case": "strict UIA provenance accepts only completed successful build run", "result": "PASS_SYNTHETIC"})
+        results.append(negative(
+            "strict UIA provenance rejects in-progress build workflow",
+            lambda: module.verify(receipt, exe_path, "mock-token",
+                fetch=make_fetch(run, artifact, archive), require_completed_run=True)))
+        results.append(negative(
+            "queued workflow cannot attest a completed Windows build job",
+            lambda: module.verify(receipt, exe_path, "mock-token",
+                fetch=make_fetch({**run, "status": "queued"}, artifact, archive))))
         mutations = [
             ("failed completed workflow run", receipt, {**run, "status": "completed", "conclusion": "failure"}, artifact, archive, exe),
             ("cancelled workflow run", receipt, {**run, "status": "cancelled"}, artifact, archive, exe),
@@ -546,14 +559,28 @@ def run_checks(results):
         "signal-sprint-frozen-source-exe-",
     ):
         assert token in build_workflow, "FROZEN_SOURCE_EXE_BUILDER_CONTRACT_MISSING:" + token
+    build_verify_command = next((line.strip() for line in build_workflow.splitlines()
+                                 if "signal_sprint_independent_build_verify.py --receipt" in line), "")
+    assert build_verify_command and "--require-completed-run" not in build_verify_command, "BUILD_SELF_VERIFY_MUST_ALLOW_IN_PROGRESS_PARENT"
+    results.append({"case": "build workflow self-verification permits its own in-progress parent run", "result": "PASS_STATIC_ONLY"})
     verifier_source = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ('PR30_SOURCE = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"', "PR30_SOURCE_RECEIPT_MISMATCH",
+    for token in ("validate_run_status", "RUN_NOT_COMPLETED_SUCCESS", "completed_run_required",
+                  'PR30_SOURCE = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"', "PR30_SOURCE_RECEIPT_MISMATCH",
                   "PR30_SOURCE_NOT_ANCESTOR", "PR30_SOURCE_ANCESTRY_MISMATCH",
                   "PR30_SOURCE_COMPARE_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_PR30_SOURCE_MISMATCH",
                   "pr30_ancestry_verified"):
         assert token in verifier_source, "INDEPENDENT_PR30_ANCESTRY_GUARD_MISSING:" + token
     results.append({"case": "independent verifier proves fixed PR30 source is ancestor of frozen build source", "result": "PASS_STATIC_ONLY"})
     results.append({"case": "frozen source unsigned EXE builder never claims GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
+    uia_verify_command = next((line.strip() for line in workflow.splitlines()
+                               if "signal_sprint_independent_build_verify.py --receipt" in line), "")
+    assert "--require-completed-run" in uia_verify_command, "PHYSICAL_UIA_MUST_REQUIRE_COMPLETED_BUILD_RUN"
+    results.append({"case": "physical UIA requires completed successful independent build run", "result": "PASS_STATIC_ONLY"})
+    results.append(negative(
+        "physical UIA strict completion flag mutation reject",
+        lambda: (_ for _ in ()).throw(AssertionError("PHYSICAL_UIA_MUST_REQUIRE_COMPLETED_BUILD_RUN"))
+        if "--require-completed-run" not in uia_verify_command.replace("--require-completed-run", "")
+        else None))
     # Keep the cloud fixture aligned with the actual Windows preflight contract.
     workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
     assert "$productSource = '" + SOURCE + "'" in workflow, "WORKFLOW_PRODUCT_SOURCE_DRIFT"
