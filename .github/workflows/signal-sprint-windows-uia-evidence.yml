@@ -16,17 +16,22 @@ on:
         description: Exact 40-character workflow branch commit SHA to attest before checkout
         required: true
         type: string
+      run_physical_uia:
+        description: Request physical GDK Windows UIA only when every cloud and revision gate passes
+        required: false
+        default: false
+        type: boolean
       exe_path:
         description: Absolute path to independently built Signal Sprint EXE on interactive Windows runner
-        required: true
+        required: false
         type: string
       exe_sha256:
         description: Independently attested SHA256 of EXE
-        required: true
+        required: false
         type: string
       build_receipt_path:
         description: Absolute path to independently produced JSON build receipt (source_commit, exe_sha256, build_run_url)
-        required: true
+        required: false
         type: string
 permissions:
   contents: read
@@ -122,13 +127,315 @@ jobs:
           path: evidence/cloud-revision-preflight.json
           if-no-files-found: error
           retention-days: 30
+  completed-build-attestation:
+    needs: [cloud-provenance-fixture]
+    outputs:
+      attestation_status: ${{ steps.publish.outputs.attestation_status }}
+    if: >-
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.expected_head == github.sha)) &&
+      needs.cloud-provenance-fixture.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact UIA workflow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Initialize completed-build evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/completed-build-attestation.json <<'JSON'
+          {
+            "schema": "signal-sprint-completed-build-attestation-v1",
+            "status": "HOLD_BUILD_RUN_NOT_COMPLETED",
+            "workflow_head_sha": "${{ github.sha }}",
+            "independent_build_verified": false,
+            "physical_gui_verified": false,
+            "gdk_package_verified": false,
+            "msix_status": "NOT_BUILT"
+          }
+          JSON
+      - name: Find exact-head completed cloud build run
+        id: discover
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          repo = "shihuiarenjinba-png/AI-Game-Factory"
+          expected_head = os.environ.get("EXPECTED_HEAD", "")
+          token = os.environ.get("GITHUB_TOKEN", "")
+          api = "https://api.github.com/repos/" + repo + "/actions/workflows/427222317/runs"
+          output = os.environ["GITHUB_OUTPUT"]
+          if not re.fullmatch(r"[a-f0-9]{40}", expected_head):
+              raise SystemExit("EXPECTED_HEAD_INVALID")
+          if not token:
+              raise SystemExit("GITHUB_TOKEN_MISSING")
+
+          last_error = None
+          latest_status = None
+          latest_run_id = None
+          for attempt in range(60):
+              query = urllib.parse.urlencode({
+                  "head_sha": expected_head,
+                  "event": "push",
+                  "per_page": 20,
+              })
+              request = urllib.request.Request(
+                  api + "?" + query,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "signal-sprint-completed-build-attestation",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      payload = json.loads(response.read(2 * 1024 * 1024 + 1))
+                  runs = payload.get("workflow_runs")
+                  if not isinstance(runs, list):
+                      raise ValueError("WORKFLOW_RUNS_INVALID")
+                  candidates = [
+                      run for run in runs
+                      if isinstance(run, dict)
+                      and run.get("head_sha") == expected_head
+                      and run.get("path") == ".github/workflows/signal-sprint-cloud-build-proof.yml"
+                      and run.get("event") == "push"
+                      and run.get("repository", {}).get("full_name") == repo
+                      and type(run.get("id")) is int and run["id"] > 0
+                  ]
+                  candidates.sort(
+                      key=lambda run: (
+                          int(run.get("run_number") or 0),
+                          int(run.get("run_attempt") or 0),
+                          int(run.get("id") or 0),
+                      ),
+                      reverse=True,
+                  )
+                  if candidates:
+                      run = candidates[0]
+                      latest_status = run.get("status")
+                      latest_run_id = run.get("id")
+                      if latest_status == "completed":
+                          if run.get("conclusion") != "success":
+                              discovery = {
+                                  "schema": "signal-sprint-build-run-discovery-v1",
+                                  "status": "FAIL_BUILD_RUN_NOT_SUCCESS",
+                                  "workflow_head_sha": expected_head,
+                                  "build_run_id": latest_run_id,
+                                  "run_status": latest_status,
+                                  "run_conclusion": run.get("conclusion"),
+                              }
+                              Path("evidence/build-run-discovery.json").write_text(
+                                  json.dumps(discovery, indent=2) + "\n", encoding="utf-8"
+                              )
+                              with open(output, "a", encoding="utf-8") as handle:
+                                  handle.write(f"build_run_id={latest_run_id}\n")
+                              raise SystemExit("BUILD_RUN_COMPLETED_NOT_SUCCESS")
+                          discovery = {
+                              "schema": "signal-sprint-build-run-discovery-v1",
+                              "status": "PASS_COMPLETED_BUILD_RUN_DISCOVERED",
+                              "workflow_head_sha": expected_head,
+                              "build_run_id": latest_run_id,
+                              "run_status": latest_status,
+                              "run_conclusion": run.get("conclusion"),
+                              "run_attempt": run.get("run_attempt"),
+                              "run_url": run.get("html_url"),
+                          }
+                          Path("evidence/build-run-discovery.json").write_text(
+                              json.dumps(discovery, indent=2) + "\n", encoding="utf-8"
+                          )
+                          with open(output, "a", encoding="utf-8") as handle:
+                              handle.write(f"build_run_id={latest_run_id}\n")
+                          break
+              except SystemExit:
+                  raise
+              except Exception as exc:
+                  last_error = type(exc).__name__ + ":" + str(exc)[:180]
+              if attempt < 59:
+                  time.sleep(10)
+          else:
+              hold_status = "HOLD_ACTIONS_API_UNAVAILABLE" if last_error else "HOLD_BUILD_RUN_NOT_COMPLETED"
+              hold = {
+                  "schema": "signal-sprint-completed-build-attestation-v1",
+                  "status": hold_status,
+                  "failure_reason": last_error or "NO_COMPLETED_EXACT_HEAD_BUILD_RUN_WITHIN_WAIT_WINDOW",
+                  "workflow_head_sha": expected_head,
+                  "build_run_id": latest_run_id,
+                  "last_observed_run_status": latest_status,
+                  "independent_build_verified": False,
+                  "physical_gui_verified": False,
+                  "gdk_package_verified": False,
+                  "msix_status": "NOT_BUILT",
+              }
+              Path("evidence/completed-build-attestation.json").write_text(
+                  json.dumps(hold, indent=2) + "\n", encoding="utf-8"
+              )
+              Path("evidence/build-run-discovery.json").write_text(
+                  json.dumps({
+                      "schema": "signal-sprint-build-run-discovery-v1",
+                      "status": hold_status,
+                      "workflow_head_sha": expected_head,
+                      "build_run_id": latest_run_id,
+                      "last_observed_run_status": latest_status,
+                      "failure_reason": last_error or "NO_COMPLETED_EXACT_HEAD_BUILD_RUN_WITHIN_WAIT_WINDOW",
+                  }, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+              with open(output, "a", encoding="utf-8") as handle:
+                  handle.write("build_run_id=\n")
+              print(hold_status)
+          PY
+      - name: Download independent build receipt from the exact run
+        id: download_proof
+        if: steps.discover.outputs.build_run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-independent-cloud-build-proof
+          path: evidence/build-proof
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.discover.outputs.build_run_id }}
+      - name: Validate receipt run and workflow head; expose exact EXE artifact ID
+        id: receipt
+        if: steps.download_proof.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path("evidence/build-proof/build-receipt.json").read_text(encoding="utf-8")
+          )
+          expected_run = os.environ.get("EXPECTED_BUILD_RUN_ID", "")
+          expected_head = os.environ.get("EXPECTED_HEAD", "")
+          if not re.fullmatch(r"[1-9][0-9]*", expected_run):
+              raise SystemExit("EXPECTED_BUILD_RUN_ID_INVALID")
+          if not re.fullmatch(r"[a-f0-9]{40}", expected_head):
+              raise SystemExit("EXPECTED_HEAD_INVALID")
+          match = re.fullmatch(
+              r"https://github\.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/([1-9][0-9]*)",
+              str(receipt.get("build_run_url", "")),
+          )
+          if not match or match.group(1) != expected_run:
+              raise SystemExit("BUILD_RUN_ID_RECEIPT_MISMATCH")
+          if receipt.get("workflow_head_sha") != expected_head:
+              raise SystemExit("BUILD_WORKFLOW_HEAD_NOT_EXACT_UIA_HEAD")
+          if receipt.get("source_commit") != "1a349faa41663c417c40710140a4d50c79b62b78":
+              raise SystemExit("BUILD_RECEIPT_PRODUCT_SOURCE_MISMATCH")
+          if receipt.get("pr30_source_commit") != "a377043d3c9ab0c71d9a100cdb841dd7000313b9":
+              raise SystemExit("BUILD_RECEIPT_PR30_SOURCE_MISMATCH")
+          artifact_id = receipt.get("artifact_id")
+          if type(artifact_id) is not int or artifact_id <= 0:
+              raise SystemExit("BUILD_ARTIFACT_ID_INVALID")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"artifact_id={artifact_id}\n")
+          PY
+      - name: Download EXE artifact by the receipt's exact artifact ID
+        id: download_exe
+        if: steps.receipt.outcome == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.receipt.outputs.artifact_id }}
+          path: evidence/frozen-source-exe
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.discover.outputs.build_run_id }}
+      - name: Independently verify completed run, build job, artifact digest and EXE SHA
+        id: verify
+        if: always() && steps.discover.outputs.build_run_id != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 qa/signal_sprint_independent_build_verify.py \
+            --receipt evidence/build-proof/build-receipt.json \
+            --exe evidence/frozen-source-exe/SignalSprint.exe \
+            --output evidence/completed-build-attestation.json \
+            --require-completed-run \
+            --expected-run-id "$EXPECTED_BUILD_RUN_ID" \
+            --expected-workflow-head "$EXPECTED_HEAD"
+      - name: Publish completed build attestation status
+        id: publish
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("evidence/completed-build-attestation.json")
+          if path.is_file():
+              try:
+                  receipt = json.loads(path.read_text(encoding="utf-8"))
+                  status = str(receipt.get("status") or "HOLD_ATTESTATION_STATUS_MISSING")
+              except (ValueError, OSError):
+                  status = "FAIL_ATTESTATION_RECEIPT_INVALID"
+          else:
+              status = "HOLD_ATTESTATION_RECEIPT_MISSING"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("attestation_status=" + status + "\n")
+          print(status)
+          PY
+      - name: Upload completed build attestation and source receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Fail closed on a completed-run or provenance mismatch
+        if: always() && (steps.discover.outcome == 'failure' || (steps.discover.outputs.build_run_id != '' && steps.verify.outcome != 'success'))
+        shell: bash
+        run: |
+          echo 'COMPLETED_BUILD_ATTESTATION_FAILED'
+          exit 1
+
   bilingual-uia:
-    needs: [cloud-provenance-fixture, cloud-revision-hold]
+    needs: [cloud-provenance-fixture, cloud-revision-hold, completed-build-attestation]
     if: >-
       github.event_name == 'workflow_dispatch' &&
+      inputs.run_physical_uia == true &&
       github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123' &&
       inputs.expected_head == github.sha &&
+      inputs.exe_path != '' &&
+      inputs.exe_sha256 != '' &&
+      inputs.build_receipt_path != '' &&
       needs.cloud-provenance-fixture.result == 'success' &&
+      needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' &&
       needs.cloud-revision-hold.outputs.revision_included == 'true'
     runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
     timeout-minutes: 25

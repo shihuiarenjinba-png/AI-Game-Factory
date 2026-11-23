@@ -110,6 +110,8 @@ def validate_independent_build_binding(build, preflight):
     assert isinstance(build, dict) and isinstance(preflight, dict), "INDEPENDENT_BUILD_BINDING_NOT_OBJECT"
     assert build.get("status") == "PASS_INDEPENDENT_BUILD_ONLY", "INDEPENDENT_BUILD_NOT_VERIFIED"
     assert build.get("independent_build_verified") is True, "INDEPENDENT_BUILD_NOT_VERIFIED"
+    assert build.get("completed_run_required") is True, "INDEPENDENT_BUILD_RUN_NOT_COMPLETED_ATTESTED"
+    assert build.get("run_status_at_verification") == "completed" and build.get("run_conclusion") == "success", "INDEPENDENT_BUILD_RUN_NOT_COMPLETED_SUCCESS"
     assert preflight.get("build_workflow_head_sha") == preflight.get("workflow_head"), "BUILD_WORKFLOW_HEAD_MISMATCH"
     assert build.get("workflow_head_sha") == preflight.get("build_workflow_head_sha"), "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH"
     assert build.get("run_id") == preflight.get("build_run_id"), "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
@@ -140,6 +142,9 @@ def assert_independent_build_binding_fixture(results):
     build = {
         "status": "PASS_INDEPENDENT_BUILD_ONLY",
         "independent_build_verified": True,
+        "completed_run_required": True,
+        "run_status_at_verification": "completed",
+        "run_conclusion": "success",
         "workflow_head_sha": workflow_head,
         "run_id": run_id,
         "artifact_id": artifact_id,
@@ -174,6 +179,14 @@ def assert_independent_build_binding_fixture(results):
     not_verified = copy.deepcopy(build)
     not_verified["independent_build_verified"] = False
     mutations.append(("independent build not verified", not_verified, preflight))
+    in_progress = copy.deepcopy(build)
+    in_progress["completed_run_required"] = False
+    in_progress["run_status_at_verification"] = "in_progress"
+    in_progress["run_conclusion"] = None
+    mutations.append(("in-progress build run cannot bind physical UIA", in_progress, preflight))
+    failed_run = copy.deepcopy(build)
+    failed_run["run_conclusion"] = "failure"
+    mutations.append(("failed completed build run cannot bind physical UIA", failed_run, preflight))
     failed_status = copy.deepcopy(build)
     failed_status["status"] = "FAIL"
     mutations.append(("independent build status not PASS", failed_status, preflight))
@@ -412,12 +425,32 @@ def assert_independent_verifier_with_mock_api(results):
         completed_good = module.verify(
             receipt, exe_path, "mock-token",
             fetch=make_fetch({**run, "status": "completed", "conclusion": "success"}, artifact, archive),
-            require_completed_run=True)
+            require_completed_run=True,
+            expected_run_id=str(run_id),
+            expected_workflow_head=workflow_head)
         assert completed_good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
         assert completed_good["run_status_at_verification"] == "completed"
         assert completed_good["run_conclusion"] == "success"
         assert completed_good["completed_run_required"] is True
-        results.append({"case": "strict UIA provenance accepts only completed successful build run", "result": "PASS_SYNTHETIC"})
+        results.append({"case": "strict UIA provenance accepts only completed successful exact-run/exact-head build", "result": "PASS_SYNTHETIC"})
+        results.append(negative(
+            "strict UIA provenance rejects wrong expected build run ID",
+            lambda: module.verify(receipt, exe_path, "mock-token",
+                fetch=make_fetch({**run, "status": "completed", "conclusion": "success"}, artifact, archive),
+                require_completed_run=True, expected_run_id=str(run_id + 1),
+                expected_workflow_head=workflow_head)))
+        results.append(negative(
+            "strict UIA provenance rejects wrong expected build workflow head",
+            lambda: module.verify(receipt, exe_path, "mock-token",
+                fetch=make_fetch({**run, "status": "completed", "conclusion": "success"}, artifact, archive),
+                require_completed_run=True, expected_run_id=str(run_id),
+                expected_workflow_head="d" * 40)))
+        results.append(negative(
+            "strict UIA provenance rejects malformed expected build workflow head",
+            lambda: module.verify(receipt, exe_path, "mock-token",
+                fetch=make_fetch({**run, "status": "completed", "conclusion": "success"}, artifact, archive),
+                require_completed_run=True, expected_run_id=str(run_id),
+                expected_workflow_head="not-a-sha")))
         results.append(negative(
             "strict UIA provenance rejects in-progress build workflow",
             lambda: module.verify(receipt, exe_path, "mock-token",
@@ -574,12 +607,49 @@ def run_checks(results):
     results.append({"case": "frozen source unsigned EXE builder never claims GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
     # Keep the cloud fixture aligned with the actual Windows preflight contract.
     workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
-    uia_verify_command = next((line.strip() for line in workflow.splitlines()
+    completed_job = workflow.split("  completed-build-attestation:", 1)[1].split("  bilingual-uia:", 1)[0]
+    windows_job = workflow.split("  bilingual-uia:", 1)[1]
+    uia_verify_command = next((line.strip() for line in windows_job.splitlines()
                                if "signal_sprint_independent_build_verify.py --receipt" in line), "")
     def assert_uia_completed_build_contract(command):
         assert "--require-completed-run" in command, "PHYSICAL_UIA_MUST_REQUIRE_COMPLETED_BUILD_RUN"
     assert_uia_completed_build_contract(uia_verify_command)
     results.append({"case": "physical UIA requires completed successful independent build run", "result": "PASS_STATIC_ONLY"})
+    completed_job_contract = {
+        "hosted cloud runner": "runs-on: ubuntu-latest",
+        "cloud push path": "github.event_name == 'push'",
+        "independent dependency": "needs: [cloud-provenance-fixture]",
+        "exact-head workflow run lookup": "head_sha",
+        "pinned build workflow ID": "/actions/workflows/427222317/runs",
+        "build run path validation": ".github/workflows/signal-sprint-cloud-build-proof.yml",
+        "build run completion check": 'latest_status == "completed"',
+        "completed build receipt artifact": "signal-sprint-independent-cloud-build-proof",
+        "exact build EXE artifact ID": "artifact-ids: ${{ steps.receipt.outputs.artifact_id }}",
+        "same run artifact download": "run-id: ${{ steps.discover.outputs.build_run_id }}",
+        "receipt run ID match": "BUILD_RUN_ID_RECEIPT_MISMATCH",
+        "receipt exact workflow head": "BUILD_WORKFLOW_HEAD_NOT_EXACT_UIA_HEAD",
+        "strict completed-run verifier": "--require-completed-run",
+        "strict expected run ID": "--expected-run-id",
+        "strict expected workflow head": "--expected-workflow-head",
+        "completed attestation artifact": "signal-sprint-completed-build-attestation",
+        "HOLD receipt on no completed run": "HOLD_BUILD_RUN_NOT_COMPLETED",
+    }
+    for label, token in completed_job_contract.items():
+        assert token in completed_job, "COMPLETED_BUILD_ATTESTATION_CONTRACT_MISSING:" + label
+        results.append({"case": "completed build attestation contract " + label, "result": "PASS_STATIC_ONLY"})
+    assert "self-hosted" not in completed_job and "signal-sprint-gdk" not in completed_job, "CLOUD_ATTESTATION_MUST_NOT_ALLOCATE_PHYSICAL_GDK_RUNNER"
+    def assert_completed_job_contract(candidate):
+        for label, token in completed_job_contract.items():
+            assert token in candidate, "COMPLETED_BUILD_ATTESTATION_CONTRACT_MISSING:" + label
+        assert "self-hosted" not in candidate and "signal-sprint-gdk" not in candidate, "CLOUD_ATTESTATION_MUST_NOT_ALLOCATE_PHYSICAL_GDK_RUNNER"
+    for label, token in completed_job_contract.items():
+        changed = completed_job.replace(token, "REMOVED_BY_MUTATION_TEST")
+        assert changed != completed_job, "COMPLETED_ATTESTATION_MUTATION_NO_EFFECT:" + label
+        results.append(negative("completed build attestation mutation reject " + label,
+                                lambda candidate=changed: assert_completed_job_contract(candidate)))
+    results.append(negative(
+        "completed build attestation cannot use the physical GDK runner",
+        lambda: assert_completed_job_contract(completed_job + "\n    runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]")))
     results.append(negative(
         "physical UIA strict completion flag mutation reject",
         lambda: assert_uia_completed_build_contract(uia_verify_command.replace("--require-completed-run", ""))))
@@ -599,9 +669,14 @@ def run_checks(results):
         "revision output": "revision_included: ${{ steps.preflight.outputs.revision_included }}",
         "preflight status output": "preflight_status: ${{ steps.preflight.outputs.preflight_status }}",
         "output file binding": "GITHUB_OUTPUT",
-        "hosted dependency": "needs: [cloud-provenance-fixture, cloud-revision-hold]",
+        "hosted dependency": "needs: [cloud-provenance-fixture, cloud-revision-hold, completed-build-attestation]",
         "fixture result gate": "needs.cloud-provenance-fixture.result == 'success'",
         "exact dispatch head": "inputs.expected_head == github.sha",
+        "explicit physical UIA request": "inputs.run_physical_uia == true",
+        "completed build attestation result": "needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY'",
+        "physical EXE path required": "inputs.exe_path != ''",
+        "physical EXE SHA required": "inputs.exe_sha256 != ''",
+        "physical build receipt required": "inputs.build_receipt_path != ''",
         "revision inclusion gate": "needs.cloud-revision-hold.outputs.revision_included == 'true'",
         "current QA branch gate": "github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123'",
         "expected hold remains observable": "EXPECTED_PRODUCT_HOLD:",
@@ -612,8 +687,10 @@ def run_checks(results):
         physical_header = candidate.split("  bilingual-uia:", 1)[1].split("    runs-on:", 1)[0]
         for label, token in runner_gate_tokens.items():
             section = physical_header if label in {
-                "hosted dependency", "fixture result gate", "exact dispatch head", "revision inclusion gate",
-                "current QA branch gate"
+                "hosted dependency", "fixture result gate", "exact dispatch head", "explicit physical UIA request",
+                "completed build attestation result", "physical EXE path required",
+                "physical EXE SHA required", "physical build receipt required",
+                "revision inclusion gate", "current QA branch gate"
             } else revision_section
             assert token in section, "PHYSICAL_UIA_RUNNER_GATE_MISSING:" + label
         assert "FIXTURE_EXPECTED_REVISION_MISMATCH_NO_LONGER_PRESENT_REVIEW_FREEZE" not in revision_section, "EXPECTED_HOLD_MUST_NOT_FAIL_CLOUD_JOB"
@@ -725,7 +802,10 @@ def run_checks(results):
     assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
     assert "actions: read" in workflow, "GITHUB_ACTIONS_READ_PERMISSION_MISSING"
     verifier = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_MISSING_OR_DUPLICATE", "ARTIFACT_PROVENANCE_NOT_REGULAR_FILE", "ARTIFACT_PROVENANCE_TOO_LARGE", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SIZE_MISMATCH", "RECEIPT_EXE_SIZE_INVALID", "RECEIPT_EXE_SIZE_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID", "ARTIFACT_DIGEST_INVALID", "ARTIFACT_ARCHIVE_DIGEST_MISMATCH", "LOCAL_EXE_SIZE_MISMATCH", "artifact_zip_sha256", "url.endswith(\"/zip\")", "application/vnd.github+json", "SafeRedirectHandler", "redirected.remove_header(name)", "Authorization", "HTTP_ERROR_", "ARTIFACT_DUPLICATE_MEMBER", "ARTIFACT_UNSAFE_MEMBER_PATH", "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "ARTIFACT_MEMBER_NOT_REGULAR_FILE", "ARTIFACT_EXE_TOO_LARGE", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
+    for token in ("EXPECTED_BUILD_RUN_ID_INVALID", "EXPECTED_BUILD_RUN_ID_MISMATCH",
+                  "EXPECTED_BUILD_WORKFLOW_HEAD_INVALID", "EXPECTED_BUILD_WORKFLOW_HEAD_MISMATCH",
+                  "expected_run_id", "expected_workflow_head",
+                  "BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_MISSING_OR_DUPLICATE", "ARTIFACT_PROVENANCE_NOT_REGULAR_FILE", "ARTIFACT_PROVENANCE_TOO_LARGE", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SIZE_MISMATCH", "RECEIPT_EXE_SIZE_INVALID", "RECEIPT_EXE_SIZE_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID", "ARTIFACT_DIGEST_INVALID", "ARTIFACT_ARCHIVE_DIGEST_MISMATCH", "LOCAL_EXE_SIZE_MISMATCH", "artifact_zip_sha256", "url.endswith(\"/zip\")", "application/vnd.github+json", "SafeRedirectHandler", "redirected.remove_header(name)", "Authorization", "HTTP_ERROR_", "ARTIFACT_DUPLICATE_MEMBER", "ARTIFACT_UNSAFE_MEMBER_PATH", "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "ARTIFACT_MEMBER_NOT_REGULAR_FILE", "ARTIFACT_EXE_TOO_LARGE", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     cloud_build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
@@ -804,10 +884,11 @@ def main():
             "workflow_head": os.environ.get("EXPECTED_HEAD"),
             "actions_run_id": os.environ.get("ACTIONS_RUN_ID"),
             "fixture_source_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+            "uia_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_bytes()).hexdigest(),
             "uia_gate_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_bytes()).hexdigest(),
             "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v3",
+            "schema": "signal-sprint-cloud-fixture-v4",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",

@@ -116,7 +116,7 @@ def validate_run_status(run, require_completed_run=False):
         require(run.get("conclusion") == "success", "RUN_NOT_SUCCESS")
 
 
-def verify(receipt, exe_path, token, fetch=get, require_completed_run=False):
+def verify(receipt, exe_path, token, fetch=get, require_completed_run=False, expected_run_id=None, expected_workflow_head=None):
     require(isinstance(receipt, dict), "RECEIPT_NOT_OBJECT")
     require(receipt.get("source_commit") == SOURCE, "BUILD_SOURCE_MISMATCH")
     require(receipt.get("pr30_source_commit") == PR30_SOURCE, "PR30_SOURCE_RECEIPT_MISMATCH")
@@ -140,6 +140,11 @@ def verify(receipt, exe_path, token, fetch=get, require_completed_run=False):
     match = RUN.fullmatch(receipt["build_run_url"])
     require(match is not None, "RUN_URL_INVALID")
     run_id = int(match.group(1))
+    if expected_run_id is not None:
+        require(isinstance(expected_run_id, str)
+                and bool(re.fullmatch(r"[1-9][0-9]*", expected_run_id)),
+                "EXPECTED_BUILD_RUN_ID_INVALID")
+        require(run_id == int(expected_run_id), "EXPECTED_BUILD_RUN_ID_MISMATCH")
     artifact_id = receipt.get("artifact_id")
     require(type(artifact_id) is int and artifact_id > 0, "ARTIFACT_ID_INVALID")
     member = receipt.get("artifact_exe_path")
@@ -154,6 +159,12 @@ def verify(receipt, exe_path, token, fetch=get, require_completed_run=False):
     require(run.get("event") in BUILD_WORKFLOW_EVENTS, "BUILD_WORKFLOW_EVENT_INVALID")
     workflow_head_sha = receipt.get("workflow_head_sha")
     require(isinstance(workflow_head_sha, str) and bool(re.fullmatch(r"[0-9a-f]{40}", workflow_head_sha)), "WORKFLOW_HEAD_SHA_INVALID")
+    if expected_workflow_head is not None:
+        require(isinstance(expected_workflow_head, str)
+                and bool(re.fullmatch(r"[0-9a-f]{40}", expected_workflow_head)),
+                "EXPECTED_BUILD_WORKFLOW_HEAD_INVALID")
+        require(workflow_head_sha == expected_workflow_head,
+                "EXPECTED_BUILD_WORKFLOW_HEAD_MISMATCH")
     require(run.get("head_sha") == workflow_head_sha, "WORKFLOW_HEAD_MISMATCH")
     require(run.get("id") == run_id and run.get("repository", {}).get("full_name") == REPO, "RUN_ID_OR_REPO_MISMATCH")
     validate_run_status(run, require_completed_run=require_completed_run)
@@ -226,6 +237,8 @@ def verify(receipt, exe_path, token, fetch=get, require_completed_run=False):
             "artifact_zip_sha256": archive_sha256, "artifact_zip_size_bytes": len(archive),
             "exe_size_bytes": local_size, "artifact_exe_size_bytes": artifact_size,
             "workflow_head_sha": workflow_head_sha, "exe_sha256": digest,
+            "expected_run_id": expected_run_id,
+            "expected_workflow_head": expected_workflow_head,
             "build_provenance_verified": True, "independent_build_verified": True,
             "physical_gui_verified": False, "artifact_kind": "EXE_QA_UNSIGNED",
             "msix_status": "NOT_BUILT", "gdk_package_verified": False}
@@ -238,6 +251,10 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--require-completed-run", action="store_true",
                         help="Require the referenced build workflow run to be completed with success.")
+    parser.add_argument("--expected-run-id",
+                        help="Require the receipt to identify this exact completed build workflow run.")
+    parser.add_argument("--expected-workflow-head",
+                        help="Require the build workflow receipt to use this exact 40-character workflow head.")
     args = parser.parse_args()
     result = {"schema": "signal-sprint-independent-build-v1", "status": "FAIL",
               "independent_build_verified": False, "physical_gui_verified": False}
@@ -246,7 +263,9 @@ def main():
         require(bool(token), "GITHUB_TOKEN_MISSING")
         receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8-sig"))
         result = verify(receipt, args.exe, token,
-                        require_completed_run=args.require_completed_run)
+                        require_completed_run=args.require_completed_run,
+                        expected_run_id=args.expected_run_id,
+                        expected_workflow_head=args.expected_workflow_head)
     except Exception as exc:
         result["error"] = type(exc).__name__ + ": " + str(exc)
     out = Path(args.output)
