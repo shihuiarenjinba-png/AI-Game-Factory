@@ -62,13 +62,13 @@ jobs:
               'failure_exit_code': int(os.environ['PROOF_EXIT_CODE']),
               'failure_workflow_line': int(os.environ['PROOF_FAILED_LINE']),
               'failure_reason': reason or 'COMMAND_FAILED',
-              'failure_command': os.environ.get('PROOF_FAILED_COMMAND', '').replace('\\n', ' ')[:240],
+              'failure_command': os.environ.get('PROOF_FAILED_COMMAND', '').replace('\n', ' ')[:240],
               'product_source': '1a349faa41663c417c40710140a4d50c79b62b78',
               'independent_build_verified': False,
               'physical_gui_verified': False,
               'product_acceptance': False,
           })
-          p.write_text(json.dumps(previous, indent=2) + '\\n')
+          p.write_text(json.dumps(previous, indent=2) + '\n')
           PYERR
           }
           trap 'on_verification_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
