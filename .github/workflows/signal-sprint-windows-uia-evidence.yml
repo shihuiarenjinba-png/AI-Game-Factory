@@ -8,6 +8,8 @@ on:
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
       - 'qa/signal_sprint_independent_build_verify.py'
       - 'qa/signal_sprint_uia_dynamic_gate.ps1'
+      - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
+      - 'products/signal-sprint/tests/test_gdk_sdk_capability_probe.py'
       - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
       - '.github/workflows/signal-sprint-cloud-build-proof.yml'
   workflow_dispatch:
