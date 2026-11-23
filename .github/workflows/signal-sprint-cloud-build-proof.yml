@@ -32,7 +32,7 @@ jobs:
           from pathlib import Path
           status = 'HOLD_BUILD_ARTIFACT_NOT_CONFIGURED'
           if os.environ.get('BUILD_RUN_ID','').isdigit() and os.environ.get('BUILD_ARTIFACT_ID','').isdigit():
-              status = 'PENDING_INDEPENDENT_VERIFICATION'
+              status = 'HOLD_INDEPENDENT_VERIFICATION_INCOMPLETE'
           Path('evidence/cloud-build-proof.json').write_text(json.dumps({
               'schema':'signal-sprint-cloud-build-proof-v1',
               'status':status,
@@ -47,15 +47,18 @@ jobs:
             exit 0
           fi
           gh api "repos/${{ github.repository }}/actions/artifacts/$BUILD_ARTIFACT_ID/zip" > /tmp/build-artifact.zip
+          test "$(stat -c%s /tmp/build-artifact.zip)" -le 1073741824 || { echo 'HOLD_ARTIFACT_ZIP_TOO_LARGE'; exit 1; }
           python3 - <<'PY'
           import json, os, zipfile
           from pathlib import Path
           with zipfile.ZipFile('/tmp/build-artifact.zip') as z:
               names=z.namelist()
               if names.count('build-receipt.json')!=1: raise SystemExit('HOLD_BUILD_RECEIPT_NOT_IN_ARTIFACT')
+              if z.getinfo('build-receipt.json').file_size > 1048576: raise SystemExit('HOLD_BUILD_RECEIPT_TOO_LARGE')
               receipt=json.loads(z.read('build-receipt.json'))
               member=receipt.get('artifact_exe_path')
               if not isinstance(member,str) or names.count(member)!=1: raise SystemExit('HOLD_EXE_NOT_IN_ARTIFACT')
+              if member.startswith('/') or '..' in member.split('/') or '\\' in member: raise SystemExit('HOLD_UNSAFE_EXE_MEMBER_PATH')
               if z.getinfo(member).file_size > 512*1024*1024: raise SystemExit('HOLD_EXE_TOO_LARGE')
               if receipt.get('artifact_id')!=int(os.environ['BUILD_ARTIFACT_ID']): raise SystemExit('HOLD_ARTIFACT_ID_MISMATCH')
               if receipt.get('build_run_url')!=f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{os.environ['BUILD_RUN_ID']}": raise SystemExit('HOLD_RUN_ID_MISMATCH')
