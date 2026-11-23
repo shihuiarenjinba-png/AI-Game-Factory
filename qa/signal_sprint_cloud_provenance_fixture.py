@@ -105,6 +105,78 @@ def validate_uia_receipt(receipt, expected_exe_sha, expected_source):
     return True
 
 
+def validate_independent_build_binding(build, preflight):
+    """Bind the independent build receipt to the exact UIA workflow head and supplied receipt IDs."""
+    assert isinstance(build, dict) and isinstance(preflight, dict), "INDEPENDENT_BUILD_BINDING_NOT_OBJECT"
+    assert build.get("status") == "PASS_INDEPENDENT_BUILD_ONLY", "INDEPENDENT_BUILD_NOT_VERIFIED"
+    assert build.get("independent_build_verified") is True, "INDEPENDENT_BUILD_NOT_VERIFIED"
+    assert build.get("workflow_head_sha") == preflight.get("workflow_head"), "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH"
+    assert build.get("run_id") == preflight.get("build_run_id"), "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
+    assert build.get("artifact_id") == preflight.get("build_artifact_id"), "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
+    assert build.get("product_source") == preflight.get("product_source"), "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
+    assert build.get("pr30_source_commit") == preflight.get("pr30_source"), "INDEPENDENT_BUILD_PR30_BINDING_MISMATCH"
+    build_sha = build.get("exe_sha256")
+    preflight_sha = preflight.get("exe_sha256")
+    assert isinstance(build_sha, str) and isinstance(preflight_sha, str) and build_sha.lower() == preflight_sha.lower(), "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
+    return True
+
+
+def assert_independent_build_binding_fixture(results):
+    """Exercise exact-head/run/artifact/source/SHA binding with synthetic receipts only."""
+    import copy
+    digest = hashlib.sha256(b"synthetic-independent-build-binding-only").hexdigest()
+    workflow_head = "c" * 40
+    run_id, artifact_id = 123456, 789012
+    preflight = {
+        "workflow_head": workflow_head,
+        "product_source": SOURCE,
+        "pr30_source": PR30_SOURCE,
+        "exe_sha256": digest,
+        "build_run_id": run_id,
+        "build_artifact_id": artifact_id,
+    }
+    build = {
+        "status": "PASS_INDEPENDENT_BUILD_ONLY",
+        "independent_build_verified": True,
+        "workflow_head_sha": workflow_head,
+        "run_id": run_id,
+        "artifact_id": artifact_id,
+        "product_source": SOURCE,
+        "pr30_source_commit": PR30_SOURCE,
+        "exe_sha256": digest,
+    }
+    assert validate_independent_build_binding(build, preflight) is True
+    results.append({"case": "synthetic independent build is bound to exact UIA head, run, artifact, source and EXE SHA", "result": "PASS_SYNTHETIC"})
+    mutations = []
+    wrong_head = copy.deepcopy(build)
+    wrong_head["workflow_head_sha"] = "d" * 40
+    mutations.append(("wrong workflow head", wrong_head))
+    wrong_run = copy.deepcopy(build)
+    wrong_run["run_id"] += 1
+    mutations.append(("wrong build run ID", wrong_run))
+    wrong_artifact = copy.deepcopy(build)
+    wrong_artifact["artifact_id"] += 1
+    mutations.append(("wrong build artifact ID", wrong_artifact))
+    wrong_source = copy.deepcopy(build)
+    wrong_source["product_source"] = HEAD
+    mutations.append(("wrong frozen product source", wrong_source))
+    wrong_pr30 = copy.deepcopy(build)
+    wrong_pr30["pr30_source_commit"] = SOURCE
+    mutations.append(("wrong PR30 ancestry source", wrong_pr30))
+    wrong_sha = copy.deepcopy(build)
+    wrong_sha["exe_sha256"] = "0" * 64
+    mutations.append(("wrong independently measured EXE SHA", wrong_sha))
+    not_verified = copy.deepcopy(build)
+    not_verified["independent_build_verified"] = False
+    mutations.append(("independent build not verified", not_verified))
+    failed_status = copy.deepcopy(build)
+    failed_status["status"] = "FAIL"
+    mutations.append(("independent build status not PASS", failed_status))
+    for label, candidate in mutations:
+        results.append(negative("synthetic build/UIA binding " + label,
+                                lambda b=candidate: validate_independent_build_binding(b, preflight)))
+
+
 def assert_uia_receipt_fixture(results):
     """Exercise bilingual receipt validation with synthetic data only."""
     import copy
@@ -448,6 +520,7 @@ def run_checks(results):
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
     assert_independent_verifier_with_mock_api(results)
     assert_uia_receipt_fixture(results)
+    assert_independent_build_binding_fixture(results)
     # The proof workflow builds only an unsigned pre-GDK EXE from the immutable product source.
     build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
     for token in (
@@ -557,6 +630,14 @@ def run_checks(results):
         "receipt SHA evidence field": "build_receipt_sha256=$receiptFileSha",
         "build receipt source": "BUILD_SOURCE_MISMATCH",
         "build receipt EXE hash": "BUILD_RECEIPT_EXE_SHA_MISMATCH",
+        "build receipt workflow head format": "BUILD_WORKFLOW_HEAD_SHA_INVALID",
+        "build receipt exact workflow head": "BUILD_WORKFLOW_HEAD_MISMATCH",
+        "build run ID parsed from trusted URL": "$buildRunId = [long]$buildRunMatch.Groups[1].Value",
+        "build run ID validation": "BUILD_RUN_ID_INVALID",
+        "build artifact ID validation": "BUILD_ARTIFACT_ID_INVALID",
+        "preflight build run ID": "build_run_id=$buildRunId",
+        "preflight build artifact ID": "build_artifact_id=$buildArtifactId",
+        "preflight build workflow head": "build_workflow_head_sha=$receipt.workflow_head_sha",
         "trusted build run": "BUILD_RUN_URL_INVALID_OR_UNTRUSTED",
         "independent build disclaimer": "RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED",
         "physical GUI disclaimer": "NOT_YET_TESTED",
@@ -587,6 +668,9 @@ def run_checks(results):
         "Start case selection": "$startName = if ($lang -ceq 'EN')",
         "independent build verified in UIA binding": "independent_build_verified=$true",
         "independent run and EXE binding": "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH",
+        "independent build workflow-head binding": "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH",
+        "independent build run/artifact binding": "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH",
+        "independent build PR30 binding": "INDEPENDENT_BUILD_PR30_BINDING_MISMATCH",
         "independent build failure": "INDEPENDENT_BUILD_NOT_VERIFIED",
     }
     for label, token in binding_guards.items():
