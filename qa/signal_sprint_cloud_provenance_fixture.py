@@ -66,8 +66,10 @@ def assert_independent_verifier_with_mock_api(results):
     receipt = {"source_commit": SOURCE, "exe_sha256": sha, "build_run_url": url,
                "artifact_id": artifact_id, "artifact_exe_path": member}
     run = {"id": run_id, "repository": {"full_name": REPO},
-           "status": "completed", "conclusion": "success", "head_sha": SOURCE}
-    artifact = {"id": artifact_id, "expired": False,
+           "status": "completed", "conclusion": "success", "head_sha": SOURCE,
+           "path": module.BUILD_WORKFLOW_PATH, "event": module.BUILD_WORKFLOW_EVENT}
+    artifact = {"id": artifact_id, "name": module.BUILD_ARTIFACT_PREFIX + SOURCE,
+                "expired": False,
                 "workflow_run": {"id": run_id, "head_sha": SOURCE}}
     def archive_with_entries(entries):
         output = io.BytesIO()
@@ -95,10 +97,18 @@ def assert_independent_verifier_with_mock_api(results):
         good = module.verify(receipt, exe_path, "mock-token", fetch=fetch)
         assert good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
         assert good["exe_sha256"] == sha and good["physical_gui_verified"] is False
-        results.append({"case": "mock API run/artifact/EXE positive", "result": "PASS_SYNTHETIC"})
+        assert good["artifact_kind"] == "EXE_QA_UNSIGNED" and good["msix_status"] == "NOT_BUILT"
+        assert good["gdk_package_verified"] is False
+        results.append({"case": "mock API approved unsigned EXE build only", "result": "PASS_SYNTHETIC"})
         mutations = [
             ("failed build run", receipt, {**run, "conclusion": "failure"}, artifact, archive, exe),
             ("wrong run source", receipt, {**run, "head_sha": HEAD}, artifact, archive, exe),
+            ("historical Factory core CI is not EXE build proof", receipt,
+             {**run, "path": ".github/workflows/factory-ci.yml", "event": "pull_request"}, artifact, archive, exe),
+            ("pull request event is not approved build dispatch", receipt,
+             {**run, "event": "pull_request"}, artifact, archive, exe),
+            ("wrong artifact name", receipt, run,
+             {**artifact, "name": "signal-sprint-msixvc"}, archive, exe),
             ("artifact belongs to other run", receipt, run, {**artifact, "workflow_run": {"id": run_id + 1, "head_sha": SOURCE}}, archive, exe),
             ("artifact source mismatch", receipt, run, {**artifact, "workflow_run": {"id": run_id, "head_sha": HEAD}}, archive, exe),
             ("tampered artifact EXE", receipt, run, artifact, archive_for(exe + b"tampered"), exe),
@@ -170,6 +180,17 @@ def run_checks(results):
         kwargs.update(update)
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
     assert_independent_verifier_with_mock_api(results)
+    # The approved builder is an unsigned EXE prototype only; it never builds MSIX or a GDK package.
+    build_workflow = pathlib.Path(".github/workflows/game-signal-sprint-windows.yml").read_text(encoding="utf-8")
+    for token in (
+        "name: GAME Signal Sprint Windows EXE prototype",
+        "Upload unsigned EXE prototype (not an MSIX)",
+        "artifact_kind = 'EXE_QA_UNSIGNED'",
+        "official_identity = 'HOLD_NOT_REGISTERED'",
+        "msix_status = 'NOT_BUILT'",
+    ):
+        assert token in build_workflow, "UNSIGNED_EXE_BUILDER_CONTRACT_MISSING:" + token
+    results.append({"case": "approved builder is unsigned EXE only, not GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
     # Keep the cloud fixture aligned with the actual Windows preflight contract.
     workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
     assert "$productSource = '" + SOURCE + "'" in workflow, "WORKFLOW_PRODUCT_SOURCE_DRIFT"
@@ -242,7 +263,7 @@ def run_checks(results):
     assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
     assert "actions: read" in workflow, "GITHUB_ACTIONS_READ_PERMISSION_MISSING"
     verifier = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ("RUN_NOT_SUCCESS", "RUN_SOURCE_MISMATCH", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_SOURCE_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY"):
+    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_NOT_DISPATCHED", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "RUN_SOURCE_MISMATCH", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_SOURCE_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     cloud_build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
