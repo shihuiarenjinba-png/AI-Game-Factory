@@ -78,10 +78,11 @@ def assert_independent_verifier_with_mock_api(results):
     }
     run = {
         "id": run_id, "repository": {"full_name": REPO},
-        "status": "completed", "conclusion": "success",
+        "status": "in_progress", "conclusion": None,
         "head_sha": workflow_head, "path": module.BUILD_WORKFLOW_PATH,
         "event": "push",
     }
+    jobs = {"jobs": [{"name": module.BUILD_JOB_NAME, "status": "completed", "conclusion": "success"}]}
     artifact = {
         "id": artifact_id, "name": module.BUILD_ARTIFACT_PREFIX + SOURCE,
         "expired": False,
@@ -104,6 +105,8 @@ def assert_independent_verifier_with_mock_api(results):
         def fetch(url, token, accept="application/vnd.github+json"):
             if url == f"{module.API}/actions/runs/{run_id}":
                 return json.dumps(run_obj).encode()
+            if url == f"{module.API}/actions/runs/{run_id}/jobs?per_page=100":
+                return json.dumps(run_obj.get("_mock_jobs", jobs)).encode()
             if url == f"{module.API}/actions/artifacts/{artifact_id}":
                 return json.dumps(artifact_obj).encode()
             if url == f"{module.API}/actions/artifacts/{artifact_id}/zip":
@@ -118,11 +121,20 @@ def assert_independent_verifier_with_mock_api(results):
         assert good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
         assert good["exe_sha256"] == sha and good["physical_gui_verified"] is False
         assert good["build_provenance_verified"] is True
+        assert good["build_job_name"] == module.BUILD_JOB_NAME
+        assert good["run_status_at_verification"] == "in_progress"
         assert good["artifact_kind"] == "EXE_QA_UNSIGNED" and good["msix_status"] == "NOT_BUILT"
         assert good["gdk_package_verified"] is False
         results.append({"case": "mock API exact workflow, source receipt and unsigned EXE positive", "result": "PASS_SYNTHETIC"})
         mutations = [
-            ("failed build run", receipt, {**run, "conclusion": "failure"}, artifact, archive, exe),
+            ("failed completed workflow run", receipt, {**run, "status": "completed", "conclusion": "failure"}, artifact, archive, exe),
+            ("invalid queued workflow run", receipt, {**run, "status": "queued"}, artifact, archive, exe),
+            ("missing frozen source build job", receipt,
+             {**run, "_mock_jobs": {"jobs": []}}, artifact, archive, exe),
+            ("duplicate frozen source build jobs", receipt,
+             {**run, "_mock_jobs": {"jobs": [jobs["jobs"][0], jobs["jobs"][0]]}}, artifact, archive, exe),
+            ("failed frozen source build job", receipt,
+             {**run, "_mock_jobs": {"jobs": [{"name": module.BUILD_JOB_NAME, "status": "completed", "conclusion": "failure"}]}}, artifact, archive, exe),
             ("wrong workflow head", receipt, {**run, "head_sha": "c" * 40}, artifact, archive, exe),
             ("historical Factory core CI is not EXE build proof", receipt,
              {**run, "path": ".github/workflows/factory-ci.yml", "event": "pull_request"}, artifact, archive, exe),
@@ -307,7 +319,7 @@ def run_checks(results):
     assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
     assert "actions: read" in workflow, "GITHUB_ACTIONS_READ_PERMISSION_MISSING"
     verifier = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
+    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     cloud_build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
