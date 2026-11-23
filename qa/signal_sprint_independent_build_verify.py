@@ -103,7 +103,7 @@ def verify(receipt, exe_path, token, fetch=get):
     require(isinstance(workflow_head_sha, str) and bool(re.fullmatch(r"[0-9a-f]{40}", workflow_head_sha)), "WORKFLOW_HEAD_SHA_INVALID")
     require(run.get("head_sha") == workflow_head_sha, "WORKFLOW_HEAD_MISMATCH")
     require(run.get("id") == run_id and run.get("repository", {}).get("full_name") == REPO, "RUN_ID_OR_REPO_MISMATCH")
-    require(run.get("status") in ("in_progress", "completed"), "RUN_NOT_ACTIVE_OR_COMPLETE")
+    require(run.get("status") in ("queued", "in_progress", "completed"), "RUN_NOT_ACTIVE_OR_COMPLETE")
     if run.get("status") == "completed":
         require(run.get("conclusion") == "success", "RUN_NOT_SUCCESS")
     jobs_payload = json.loads(fetch(f"{API}/actions/runs/{run_id}/jobs?per_page=100", token))
