@@ -364,6 +364,7 @@ jobs:
         with:
           artifact-ids: ${{ steps.receipt.outputs.artifact_id }}
           path: evidence/frozen-source-exe
+          merge-multiple: true
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.discover.outputs.build_run_id }}

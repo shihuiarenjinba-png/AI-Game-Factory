@@ -625,6 +625,7 @@ def run_checks(results):
         "build run completion check": 'latest_status == "completed"',
         "completed build receipt artifact": "signal-sprint-independent-cloud-build-proof",
         "exact build EXE artifact ID": "artifact-ids: ${{ steps.receipt.outputs.artifact_id }}",
+        "single artifact flattened to exact EXE path": "merge-multiple: true",
         "same run artifact download": "run-id: ${{ steps.discover.outputs.build_run_id }}",
         "receipt run ID match": "BUILD_RUN_ID_RECEIPT_MISMATCH",
         "receipt exact workflow head": "BUILD_WORKFLOW_HEAD_NOT_EXACT_UIA_HEAD",
