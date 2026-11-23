@@ -572,17 +572,17 @@ def run_checks(results):
         assert token in verifier_source, "INDEPENDENT_PR30_ANCESTRY_GUARD_MISSING:" + token
     results.append({"case": "independent verifier proves fixed PR30 source is ancestor of frozen build source", "result": "PASS_STATIC_ONLY"})
     results.append({"case": "frozen source unsigned EXE builder never claims GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
+    # Keep the cloud fixture aligned with the actual Windows preflight contract.
+    workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
     uia_verify_command = next((line.strip() for line in workflow.splitlines()
                                if "signal_sprint_independent_build_verify.py --receipt" in line), "")
-    assert "--require-completed-run" in uia_verify_command, "PHYSICAL_UIA_MUST_REQUIRE_COMPLETED_BUILD_RUN"
+    def assert_uia_completed_build_contract(command):
+        assert "--require-completed-run" in command, "PHYSICAL_UIA_MUST_REQUIRE_COMPLETED_BUILD_RUN"
+    assert_uia_completed_build_contract(uia_verify_command)
     results.append({"case": "physical UIA requires completed successful independent build run", "result": "PASS_STATIC_ONLY"})
     results.append(negative(
         "physical UIA strict completion flag mutation reject",
-        lambda: (_ for _ in ()).throw(AssertionError("PHYSICAL_UIA_MUST_REQUIRE_COMPLETED_BUILD_RUN"))
-        if "--require-completed-run" not in uia_verify_command.replace("--require-completed-run", "")
-        else None))
-    # Keep the cloud fixture aligned with the actual Windows preflight contract.
-    workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
+        lambda: assert_uia_completed_build_contract(uia_verify_command.replace("--require-completed-run", ""))))
     assert "$productSource = '" + SOURCE + "'" in workflow, "WORKFLOW_PRODUCT_SOURCE_DRIFT"
     assert "$pr30 = '" + PR30_SOURCE + "'" in workflow and "PR30_SOURCE_ANCESTRY_MISMATCH" in workflow, "UIA_WORKFLOW_PR30_ANCESTRY_GUARD_MISSING"
     assert SOURCE != HEAD, "PRODUCT_SOURCE_REFERENCE_ALIGNMENT_CHANGED_REVIEW_REQUIRED"
