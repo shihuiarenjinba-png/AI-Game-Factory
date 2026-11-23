@@ -238,13 +238,19 @@ jobs:
           if not re.fullmatch(r"[1-9][0-9]*", artifact_id): raise SystemExit("BUILD_ARTIFACT_ID_INVALID")
           if not re.fullmatch(r"[0-9a-f]{64}", expected_sha): raise SystemExit("BUILD_EXE_SHA_INVALID")
           if not exe.is_file() or not provenance_path.is_file(): raise SystemExit("DOWNLOADED_BUILD_FILES_MISSING")
-          digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+          digest_state = hashlib.sha256()
+          with exe.open("rb") as exe_stream:
+              for chunk in iter(lambda: exe_stream.read(1024 * 1024), b""):
+                  digest_state.update(chunk)
+          digest = digest_state.hexdigest()
+          local_size = exe.stat().st_size
           if digest != expected_sha: raise SystemExit("WINDOWS_OUTPUT_SHA_MISMATCH")
           provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
           if provenance.get("source_commit") != source: raise SystemExit("EMBEDDED_SOURCE_MISMATCH")
           if provenance.get("workflow_head_sha") != workflow_head: raise SystemExit("EMBEDDED_WORKFLOW_HEAD_MISMATCH")
           if provenance.get("build_run_id") != int(run_id): raise SystemExit("EMBEDDED_RUN_ID_MISMATCH")
           if provenance.get("exe_sha256") != digest: raise SystemExit("EMBEDDED_EXE_SHA_MISMATCH")
+          if provenance.get("exe_size_bytes") != local_size: raise SystemExit("EMBEDDED_EXE_SIZE_MISMATCH")
           if provenance.get("artifact_kind") != "EXE_QA_UNSIGNED": raise SystemExit("EMBEDDED_ARTIFACT_KIND_MISMATCH")
           if provenance.get("msix_status") != "NOT_BUILT": raise SystemExit("MSIX_MUST_NOT_BE_BUILT")
           if provenance.get("gdk_package_verified") is not False: raise SystemExit("GDK_PACKAGE_FALSE_CLAIM")
