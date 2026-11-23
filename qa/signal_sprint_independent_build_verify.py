@@ -15,6 +15,7 @@ import zipfile
 
 REPO = "shihuiarenjinba-png/AI-Game-Factory"
 SOURCE = "1a349faa41663c417c40710140a4d50c79b62b78"
+PR30_SOURCE = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
 API = "https://api.github.com/repos/" + REPO
 SHA = re.compile(r"^[0-9a-f]{64}$")
 RUN = re.compile(r"^https://github\.com/" + REPO + r"/actions/runs/([1-9][0-9]*)$")
@@ -104,6 +105,18 @@ def safe_zip_member(name):
 def verify(receipt, exe_path, token, fetch=get):
     require(isinstance(receipt, dict), "RECEIPT_NOT_OBJECT")
     require(receipt.get("source_commit") == SOURCE, "BUILD_SOURCE_MISMATCH")
+    require(receipt.get("pr30_source_commit") == PR30_SOURCE, "PR30_SOURCE_RECEIPT_MISMATCH")
+    compare = json.loads(fetch(f"{API}/compare/{PR30_SOURCE}...{SOURCE}", token))
+    require(compare.get("status") == "ahead" and type(compare.get("ahead_by")) is int
+            and compare.get("ahead_by") > 0 and compare.get("behind_by") == 0,
+            "PR30_SOURCE_NOT_ANCESTOR")
+    base_commit = compare.get("base_commit")
+    head_commit = compare.get("head_commit")
+    merge_base_commit = compare.get("merge_base_commit")
+    require(isinstance(base_commit, dict) and base_commit.get("sha") == PR30_SOURCE
+            and isinstance(head_commit, dict) and head_commit.get("sha") == SOURCE
+            and isinstance(merge_base_commit, dict) and merge_base_commit.get("sha") == PR30_SOURCE,
+            "PR30_SOURCE_ANCESTRY_MISMATCH")
     receipt_exe_size = receipt.get("exe_size_bytes")
     require(type(receipt_exe_size) is int and receipt_exe_size > 0, "RECEIPT_EXE_SIZE_INVALID")
     require(isinstance(receipt.get("exe_sha256"), str) and bool(SHA.fullmatch(receipt["exe_sha256"].lower())), "RECEIPT_SHA_INVALID")
@@ -178,6 +191,7 @@ def verify(receipt, exe_path, token, fetch=get):
         provenance = json.loads(z.read(provenance_info))
         require(isinstance(provenance, dict), "ARTIFACT_PROVENANCE_NOT_OBJECT")
         require(provenance.get("source_commit") == SOURCE, "ARTIFACT_PROVENANCE_SOURCE_MISMATCH")
+        require(provenance.get("pr30_source_commit") == PR30_SOURCE, "ARTIFACT_PROVENANCE_PR30_SOURCE_MISMATCH")
         require(provenance.get("workflow_head_sha") == workflow_head_sha, "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH")
         require(provenance.get("build_run_id") == run_id, "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH")
         require(provenance.get("exe_sha256") == digest, "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH")
@@ -189,6 +203,7 @@ def verify(receipt, exe_path, token, fetch=get):
     require(artifact_digest == digest, "ARTIFACT_EXE_SHA_MISMATCH")
     return {"schema": "signal-sprint-independent-build-v1",
             "status": "PASS_INDEPENDENT_BUILD_ONLY", "product_source": SOURCE,
+            "pr30_source_commit": PR30_SOURCE, "pr30_ancestry_verified": True,
             "run_id": run_id, "artifact_id": artifact_id,
             "build_job_name": BUILD_JOB_NAME, "run_status_at_verification": run.get("status"),
             "artifact_exe_path": member, "artifact_provenance_path": provenance_member,
