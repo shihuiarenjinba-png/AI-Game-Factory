@@ -17,6 +17,9 @@ SOURCE = "1a349faa41663c417c40710140a4d50c79b62b78"
 API = "https://api.github.com/repos/" + REPO
 SHA = re.compile(r"^[0-9a-f]{64}$")
 RUN = re.compile(r"^https://github\.com/" + REPO + r"/actions/runs/([1-9][0-9]*)$")
+BUILD_WORKFLOW_PATH = ".github/workflows/game-signal-sprint-windows.yml"
+BUILD_WORKFLOW_EVENT = "workflow_dispatch"
+BUILD_ARTIFACT_PREFIX = "game-signal-sprint-exe-"
 MAX_API_JSON_BYTES = 2 * 1024 * 1024
 MAX_ARTIFACT_ZIP_BYTES = 1024 * 1024 * 1024
 MAX_ARTIFACT_UNCOMPRESSED_BYTES = 600 * 1024 * 1024
@@ -90,11 +93,16 @@ def verify(receipt, exe_path, token, fetch=get):
     digest, local_size = hash_file(exe_path, MAX_EXE_BYTES, "LOCAL_EXE_TOO_LARGE")
     require(digest == receipt["exe_sha256"].lower(), "LOCAL_EXE_SHA_MISMATCH")
     run = json.loads(fetch(f"{API}/actions/runs/{run_id}", token))
+    # Only the frozen-source unsigned EXE prototype workflow is accepted as build provenance.
+    # Generic Factory CI, PR checks, MSIX, and arbitrary workflow artifacts are not build proof.
+    require(run.get("path") == BUILD_WORKFLOW_PATH, "BUILD_WORKFLOW_PATH_MISMATCH")
+    require(run.get("event") == BUILD_WORKFLOW_EVENT, "BUILD_WORKFLOW_EVENT_NOT_DISPATCHED")
     require(run.get("id") == run_id and run.get("repository", {}).get("full_name") == REPO, "RUN_ID_OR_REPO_MISMATCH")
     require(run.get("status") == "completed" and run.get("conclusion") == "success", "RUN_NOT_SUCCESS")
     require(run.get("head_sha") == SOURCE, "RUN_SOURCE_MISMATCH")
     artifact = json.loads(fetch(f"{API}/actions/artifacts/{artifact_id}", token))
     require(artifact.get("id") == artifact_id and not artifact.get("expired", True), "ARTIFACT_INVALID_OR_EXPIRED")
+    require(artifact.get("name") == BUILD_ARTIFACT_PREFIX + SOURCE, "BUILD_ARTIFACT_NAME_MISMATCH")
     require(artifact.get("workflow_run", {}).get("id") == run_id, "ARTIFACT_RUN_MISMATCH")
     require(artifact.get("workflow_run", {}).get("head_sha") == SOURCE, "ARTIFACT_SOURCE_MISMATCH")
     archive = fetch(f"{API}/actions/artifacts/{artifact_id}/zip", token, "application/octet-stream")
@@ -118,7 +126,9 @@ def verify(receipt, exe_path, token, fetch=get):
             "status": "PASS_INDEPENDENT_BUILD_ONLY", "product_source": SOURCE,
             "run_id": run_id, "artifact_id": artifact_id,
             "artifact_exe_path": member, "exe_sha256": digest,
-            "independent_build_verified": True, "physical_gui_verified": False}
+            "independent_build_verified": True, "physical_gui_verified": False,
+            "artifact_kind": "EXE_QA_UNSIGNED", "msix_status": "NOT_BUILT",
+            "gdk_package_verified": False}
 
 
 def main():
