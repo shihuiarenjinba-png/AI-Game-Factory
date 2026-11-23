@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 REPO = "shihuiarenjinba-png/AI-Game-Factory"
 SOURCE = "1a349faa41663c417c40710140a4d50c79b62b78"
+PR30_SOURCE = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
 HEAD = "9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2"
 BUTTONS = {
     "EN": ["Start / Retry (R)", "Undo (U)", "Save (Ctrl+S)", "Load (L)", "日本語 (J)"],
@@ -66,13 +67,15 @@ def assert_independent_verifier_with_mock_api(results):
     member, provenance_member = "SignalSprint.exe", "build-provenance.json"
     url = f"https://github.com/{REPO}/actions/runs/{run_id}"
     receipt = {
-        "source_commit": SOURCE, "workflow_head_sha": workflow_head,
+        "source_commit": SOURCE, "pr30_source_commit": module.PR30_SOURCE,
+        "workflow_head_sha": workflow_head,
         "exe_sha256": sha, "exe_size_bytes": len(exe),
         "build_run_url": url, "artifact_id": artifact_id,
         "artifact_exe_path": member, "artifact_provenance_path": provenance_member,
     }
     provenance = {
-        "source_commit": SOURCE, "workflow_head_sha": workflow_head,
+        "source_commit": SOURCE, "pr30_source_commit": module.PR30_SOURCE,
+        "workflow_head_sha": workflow_head,
         "build_run_id": run_id, "exe_sha256": sha, "exe_size_bytes": len(exe),
         "artifact_kind": "EXE_QA_UNSIGNED", "msix_status": "NOT_BUILT",
         "gdk_package_verified": False, "physical_gui_verified": False,
@@ -89,6 +92,12 @@ def assert_independent_verifier_with_mock_api(results):
         "expired": False,
         "workflow_run": {"id": run_id, "head_sha": workflow_head},
     }
+    compare = {
+        "status": "ahead", "ahead_by": 11, "behind_by": 0,
+        "base_commit": {"sha": module.PR30_SOURCE},
+        "head_commit": {"sha": module.SOURCE},
+        "merge_base_commit": {"sha": module.PR30_SOURCE},
+    }
     def archive_with_entries(entries):
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w") as z:
@@ -102,7 +111,7 @@ def assert_independent_verifier_with_mock_api(results):
             (provenance_member, json.dumps(value).encode("utf-8")),
         ])
     archive = archive_for(exe)
-    def make_fetch(run_obj, artifact_obj, zip_bytes, digest_override=None, include_digest=True):
+    def make_fetch(run_obj, artifact_obj, zip_bytes, digest_override=None, include_digest=True, compare_obj=None):
         artifact_payload = dict(artifact_obj)
         if include_digest:
             artifact_payload["digest"] = (
@@ -112,6 +121,8 @@ def assert_independent_verifier_with_mock_api(results):
         else:
             artifact_payload.pop("digest", None)
         def fetch(url, token, accept="application/vnd.github+json"):
+            if url == f"{module.API}/compare/{module.PR30_SOURCE}...{module.SOURCE}":
+                return json.dumps(compare if compare_obj is None else compare_obj).encode()
             if url == f"{module.API}/actions/runs/{run_id}":
                 return json.dumps(run_obj).encode()
             if url == f"{module.API}/actions/runs/{run_id}/jobs?per_page=100":
@@ -128,6 +139,7 @@ def assert_independent_verifier_with_mock_api(results):
         fetch = make_fetch(run, artifact, archive)
         good = module.verify(receipt, exe_path, "mock-token", fetch=fetch)
         assert good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
+        assert good["pr30_source_commit"] == module.PR30_SOURCE and good["pr30_ancestry_verified"] is True
         assert good["exe_sha256"] == sha and good["physical_gui_verified"] is False
         assert good["artifact_zip_sha256"] == hashlib.sha256(archive).hexdigest()
         assert good["artifact_zip_size_bytes"] == len(archive)
@@ -139,6 +151,21 @@ def assert_independent_verifier_with_mock_api(results):
         assert good["artifact_kind"] == "EXE_QA_UNSIGNED" and good["msix_status"] == "NOT_BUILT"
         assert good["gdk_package_verified"] is False
         results.append({"case": "mock API exact workflow, source receipt and unsigned EXE positive", "result": "PASS_SYNTHETIC"})
+        results.append(negative("mock API receipt PR30 source mismatch", lambda: module.verify(
+            {**receipt, "pr30_source_commit": SOURCE}, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive))))
+        results.append(negative("mock API PR30 compare diverged history", lambda: module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "status": "diverged", "behind_by": 1}))))
+        results.append(negative("mock API PR30 compare wrong merge base", lambda: module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "merge_base_commit": {"sha": SOURCE}}))))
+        results.append(negative("mock API PR30 compare wrong frozen source head", lambda: module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "head_commit": {"sha": HEAD}}))))
+        results.append(negative("mock API PR30 compare wrong base commit", lambda: module.verify(
+            receipt, exe_path, "mock-token",
+            fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "base_commit": {"sha": SOURCE}}))))
         results.append(negative("mock API missing artifact digest", lambda: module.verify(
             receipt, exe_path, "mock-token",
             fetch=make_fetch(run, artifact, archive, include_digest=False))))
@@ -284,6 +311,11 @@ def run_checks(results):
     for token in (
         "windows-frozen-source-exe:",
         "ref: 1a349faa41663c417c40710140a4d50c79b62b78",
+        "$pr30 = 'a377043d3c9ab0c71d9a100cdb841dd7000313b9'",
+        "git -C frozen-source merge-base --is-ancestor $pr30 $actual",
+        "PR30_SOURCE_ANCESTRY_MISMATCH",
+        "PR30_SOURCE_SHA: ${{ steps.source.outputs.pr30_source_sha }}",
+        "pr30_source_commit = $env:PR30_SOURCE_SHA",
         "Pillow==11.3.0",
         "pyinstaller==6.16.0",
         "& $venvPython -m PyInstaller",
@@ -294,10 +326,17 @@ def run_checks(results):
         "signal-sprint-frozen-source-exe-",
     ):
         assert token in build_workflow, "FROZEN_SOURCE_EXE_BUILDER_CONTRACT_MISSING:" + token
+    verifier_source = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
+    for token in ("PR30_SOURCE = 'a377043d3c9ab0c71d9a100cdb841dd7000313b9'", "PR30_SOURCE_RECEIPT_MISMATCH",
+                  "PR30_SOURCE_NOT_ANCESTOR", "PR30_SOURCE_ANCESTRY_MISMATCH",
+                  "ARTIFACT_PROVENANCE_PR30_SOURCE_MISMATCH", "pr30_ancestry_verified"):
+        assert token in verifier_source, "INDEPENDENT_PR30_ANCESTRY_GUARD_MISSING:" + token
+    results.append({"case": "independent verifier proves fixed PR30 source is ancestor of frozen build source", "result": "PASS_STATIC_ONLY"})
     results.append({"case": "frozen source unsigned EXE builder never claims GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
     # Keep the cloud fixture aligned with the actual Windows preflight contract.
     workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
     assert "$productSource = '" + SOURCE + "'" in workflow, "WORKFLOW_PRODUCT_SOURCE_DRIFT"
+    assert "$pr30 = '" + PR30_SOURCE + "'" in workflow and "PR30_SOURCE_ANCESTRY_MISMATCH" in workflow, "UIA_WORKFLOW_PR30_ANCESTRY_GUARD_MISSING"
     assert SOURCE != HEAD, "PRODUCT_SOURCE_REFERENCE_ALIGNMENT_CHANGED_REVIEW_REQUIRED"
     assert "signal-sprint-cloud-provenance-fixture" in workflow, "CLOUD_ARTIFACT_UPLOAD_MISSING"
     assert "signal-sprint-uia-receipt" in workflow, "WINDOWS_ARTIFACT_UPLOAD_MISSING"
