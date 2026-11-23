@@ -1,45 +1,114 @@
 """Read-only Signal Sprint GDK package-readiness receipt.
 
 This check correlates the current QA build with the older, source-pinned GDK
-contract. It never authorizes or performs CAS, SDK, MakePkg, signing, MSIXVC,
-ordinary MSIX, Store, or central-ledger operations. A successful CI job means
-only that this HOLD receipt was generated and validated.
+contract. It parses the exact Provisioner PR53 source as data; it never imports
+or executes Provisioner code. It never authorizes or performs CAS, SDK, MakePkg,
+signing, MSIXVC, ordinary MSIX, Store, or central-ledger operations. A
+successful CI job means only that this HOLD receipt was generated.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
+import ast
 import json
 import os
 from pathlib import Path
 import platform
 import re
 import subprocess
-import sys
-
-from signal_sprint_gdk_post_identity_preflight import (
-    _identity_expected,
-    assess,
-)
-from signal_sprint_gdk_review_gate import (
-    ASSETS,
-    IMMUTABLE as GDK_SOURCE_SHA,
-    PINNED_EXE,
-    PINNED_REQUEST,
-    PINNED_ZIP,
-    PR53_SHA,
-    ROUTE,
-    load_pr53_contract,
-)
 
 QA_SOURCE_SHA = "1a349faa41663c417c40710140a4d50c79b62b78"
 PR30_SOURCE_SHA = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
 REQUIRED_WIN_LOSE_SHA = "9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2"
+PR53_SHA = "ac4bd6d4fed975dae139a6638b0b7f78e09e6d71"
+GDK_SOURCE_SHA = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
+PINNED_REQUEST = "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e"
+PINNED_EXE = "9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad"
+PINNED_ZIP = "e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412"
 PROVISIONER_REPO = "https://github.com/shihuiarenjinba-png/Repository-Provisioner-game.git"
 CAS_BRANCH = "codex/game-signal-sprint-gdk-cas-c058cbf7fe38"
 BUILD_BRANCH_PREFIX = "codex/game-signal-sprint-gdk-build-"
+IDENTITY_FIELDS = {
+    "store_id", "name", "publisher", "publisher_display_name",
+    "package_family_name", "package_sid", "xbox_title_id", "xbox_scid",
+    "msa_app_id",
+}
+ASSETS = {
+    "StoreLogo": ("StoreLogo.png", (100, 100)),
+    "Square150x150Logo": ("Logo.png", (150, 150)),
+    "Square44x44Logo": ("SmallLogo.png", (44, 44)),
+    "SplashScreenImage": ("SplashScreen.png", (1920, 1080)),
+}
+ROUTE = {
+    "schema_version": 1,
+    "packaging_family": "GDK",
+    "package_format": "MSIXVC_OR_MSIXVC2",
+    "next_stage": "GDK_SDK_VALIDATE_THEN_MAKEPKG_PC",
+}
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _assigned(tree, key, scope=None):
+    nodes = tree.body if scope is None else scope.body
+    for node in nodes:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == key for target in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise ValueError("EXTERNAL_CONTRACT_FIELD_MISSING_" + key)
+
+
+def _parse(path: Path):
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def load_pr53_contract(root: Path):
+    """Verify exact PR53 contract by AST/literal inspection only; never import it."""
+    head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True, timeout=15,
+    ).stdout.strip()
+    if head != PR53_SHA:
+        raise ValueError("PROVISIONER_PR53_HEAD_DRIFT")
+
+    identity_tree = _parse(root / "package_identity_provisioner.py")
+    intake_tree = _parse(root / "gdk_build_intake.py")
+    config_tree = _parse(root / "gdk_microsoft_game_config.py")
+    job = _assigned(identity_tree, "PINNED_SIGNAL_SPRINT_JOB")
+    identity = _assigned(identity_tree, "PINNED_SIGNAL_SPRINT_GDK_IDENTITY")
+    if job.get("source_sha") != GDK_SOURCE_SHA or job.get("request_id") != PINNED_REQUEST:
+        raise ValueError("PROVISIONER_PINNED_SOURCE_REQUEST_MISMATCH")
+    if set(identity) != IDENTITY_FIELDS or any(type(value) is not str for value in identity.values()):
+        raise ValueError("PROVISIONER_PINNED_IDENTITY_FIELD_SET_MISMATCH")
+    if _assigned(intake_tree, "EXE_SHA256") != PINNED_EXE:
+        raise ValueError("PROVISIONER_PINNED_EXE_CHANGED")
+    if _assigned(intake_tree, "ARTIFACT_SHA256") != PINNED_ZIP:
+        raise ValueError("PROVISIONER_PINNED_ZIP_CHANGED")
+    if _assigned(config_tree, "ASSETS") != ASSETS:
+        raise ValueError("PROVISIONER_GDK_ASSET_CONTRACT_CHANGED")
+    verify_funcs = [
+        node for node in config_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "verify_staging_inputs"
+    ]
+    if len(verify_funcs) != 1 or _assigned(config_tree, "routing", verify_funcs[0]) != ROUTE:
+        raise ValueError("PROVISIONER_GDK_ROUTE_CHANGED")
+    return {
+        "provisioner_pr": 53,
+        "provisioner_head_sha": head,
+        "source_sha": job["source_sha"],
+        "pinned_request_id": job["request_id"],
+        "pinned_exe_sha256": PINNED_EXE,
+        "pinned_artifact_zip_sha256": PINNED_ZIP,
+        "registration": "GDK_GAME",
+        "routing": ROUTE,
+        "asset_filenames": sorted(name for name, _ in ASSETS.values()),
+        "identity_field_names": sorted(identity),
+        "expected_staging_payload_files": sorted(
+            ["SignalSprint.exe", *(name for name, _ in ASSETS.values())]
+        ),
+        "config_filename": "MicrosoftGame.config",
+    }
 
 
 def _unique(pairs):
@@ -61,13 +130,13 @@ def _read_json(path: Path):
 
 
 def _git(repo: Path, *args: str):
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    command = ["git", "-C", str(repo), *args]
+    try:
+        return subprocess.run(
+            command, capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return subprocess.CompletedProcess(command, 127, "", "GIT_COMMAND_UNAVAILABLE")
 
 
 def _commit_exists(repo: Path, sha: str) -> bool:
@@ -93,13 +162,14 @@ def _is_ancestor(repo: Path, ancestor: str, descendant: str):
 
 
 def _remote_refs():
-    result = subprocess.run(
-        ["git", "ls-remote", "--heads", PROVISIONER_REPO],
-        capture_output=True,
-        text=True,
-        timeout=45,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--heads", PROVISIONER_REPO],
+            capture_output=True, text=True, timeout=45, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {"lookup_status": "FAILED", "error": "GDK_REMOTE_REF_LOOKUP_FAILED",
+                "cas_ref_sha": None, "build_refs": []}
     if result.returncode != 0:
         return {"lookup_status": "FAILED", "error": "GDK_REMOTE_REF_LOOKUP_FAILED",
                 "cas_ref_sha": None, "build_refs": []}
@@ -236,10 +306,34 @@ def _validate_build_proof(proof_path: Path, env: dict):
     }
 
 
+def _default_preflight(contract_verified: bool):
+    reasons = {
+        "identity": "APPROVED_IDENTITY_FILE_NOT_SUPPLIED_CAS_UNVERIFIED",
+        "cas": "ACTUAL_IDENTITY_ONLY_CAS_AND_POST_CAS_BUILD_NOT_VERIFIED",
+        "version": "EXPLICIT_APPROVED_GDK_PACKAGE_VERSION_MISSING",
+        "assets_and_staging": "SIX_REAL_GDK_STAGING_FILES_NOT_SUPPLIED",
+        "sdk_toolchain": "GDK_SDK_WINDOWS_HOST_REQUIRED",
+        "sdk_validation": "OFFICIAL_GDK_SDK_VALIDATION_NOT_EXECUTED_OR_EVIDENCED",
+        "signing": "GDK_SIGNING_REVIEW_OR_VALID_SIGNATURE_EVIDENCE_MISSING",
+        "msixvc2": "REAL_MSIXVC2_BUILD_AND_BYTES_NOT_VERIFIED",
+        "physical_human_qa": "JA_EN_DPI_125_150_AND_FIRST30_PHYSICAL_HUMAN_QA_NOT_VERIFIED",
+    }
+    gates = {
+        "source_request_route": {
+            "status": "CHECK_ONLY" if contract_verified else "HOLD",
+            "reason": "PR53_PINNED_CONTRACT_READ_ONLY" if contract_verified else "PROVISIONER_CONTRACT_INVALID",
+        }
+    }
+    gates.update({name: {"status": "HOLD", "reason": reason}
+                  for name, reason in reasons.items()})
+    return {"schema_version": 1, "status": "HOLD", "gates": gates}
+
+
 def _hold_gates(preflight):
     gates = preflight.get("gates", {}) if isinstance(preflight, dict) else {}
     return {
-        name: {"status": gate.get("status"), "reason": gate.get("reason")}
+        name: {"status": gate.get("status"),
+               "reason": gate.get("reason") or gate.get("detail")}
         for name, gate in gates.items()
         if isinstance(gate, dict)
     }
@@ -400,24 +494,16 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
-    env = dict(os.environ)
     contract = None
     identity_fields = {}
-    preflight = {"status": "HOLD", "gates": {}}
     contract_error = None
     try:
         contract = load_pr53_contract(args.provisioner_checkout)
-        identity_fields = _identity_expected(args.provisioner_checkout)
-        preflight = assess(args.provisioner_checkout)
+        identity_fields = {name: None for name in contract["identity_field_names"]}
     except (ValueError, OSError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         contract_error = type(exc).__name__ + ":" + str(exc)
-        preflight = {
-            "status": "HOLD",
-            "gates": {
-                "source_request_route": {"status": "HOLD", "reason": "PROVISIONER_CONTRACT_INVALID"}
-            },
-        }
 
+    preflight = _default_preflight(contract is not None)
     ancestry = {
         "pr30_source_is_ancestor_of_qa_source": _is_ancestor(
             args.factory_checkout, PR30_SOURCE_SHA, QA_SOURCE_SHA),
@@ -427,7 +513,7 @@ def main(argv=None):
             args.factory_checkout, REQUIRED_WIN_LOSE_SHA, QA_SOURCE_SHA),
     }
     refs = _remote_refs()
-    build = _validate_build_proof(args.build_proof, env)
+    build = _validate_build_proof(args.build_proof, dict(os.environ))
     report = compose_receipt(
         contract=contract,
         identity_fields=identity_fields,
@@ -435,8 +521,8 @@ def main(argv=None):
         build=build,
         ancestry=ancestry,
         refs=refs,
-        workflow_head_sha=env.get("WORKFLOW_HEAD_SHA", ""),
-        build_run_id=env.get("BUILD_RUN_ID", ""),
+        workflow_head_sha=os.environ.get("WORKFLOW_HEAD_SHA", ""),
+        build_run_id=os.environ.get("BUILD_RUN_ID", ""),
     )
     if contract_error:
         report["provisioner_contract_error"] = contract_error
