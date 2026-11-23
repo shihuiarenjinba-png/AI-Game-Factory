@@ -47,12 +47,31 @@ jobs:
             throw 'FROZEN_PRODUCT_SOURCE_MISMATCH'
           }
           "product_source_sha=$actual" >> $env:GITHUB_OUTPUT
-      - name: Build unsigned pre-GDK EXE only (no GDK SDK, MSIX or Store action)
+      - name: Build unsigned pre-GDK EXE with pinned test and PyInstaller dependencies
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File frozen-source/scripts/build-windows.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'FROZEN_SOURCE_EXE_BUILD_FAILED' }
+          $venv = Join-Path $env:RUNNER_TEMP 'signal-sprint-frozen-build'
+          try {
+            python -m venv $venv
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_BUILD_VENV_FAILED' }
+            $venvPython = Join-Path $venv 'Scripts/python.exe'
+            if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) { throw 'FROZEN_BUILD_PYTHON_MISSING' }
+            & $venvPython -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)'
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_BUILD_REQUIRES_PYTHON_312' }
+            & $venvPython -m pip install --disable-pip-version-check 'Pillow==11.3.0' 'pyinstaller==6.16.0'
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_BUILD_DEPENDENCIES_FAILED' }
+            Set-Location frozen-source
+            & $venvPython -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_SOURCE_GAME_TESTS_FAILED' }
+            & $venvPython -m PyInstaller --noconfirm --clean --onefile --windowed --name SignalSprint --distpath dist/game --workpath dist/work --specpath dist/spec products/signal-sprint/main.py
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_SOURCE_EXE_BUILD_FAILED' }
+            if (-not (Test-Path -LiteralPath 'dist/game/SignalSprint.exe' -PathType Leaf)) { throw 'FROZEN_SOURCE_EXE_MISSING' }
+          } finally {
+            if (Test-Path -LiteralPath $venv) {
+              Remove-Item -LiteralPath $venv -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
       - name: Hash PE and write embedded build provenance
         id: hash
         shell: pwsh
