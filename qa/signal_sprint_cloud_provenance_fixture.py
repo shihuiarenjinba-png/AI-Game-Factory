@@ -106,11 +106,12 @@ def validate_uia_receipt(receipt, expected_exe_sha, expected_source):
 
 
 def validate_independent_build_binding(build, preflight):
-    """Bind the independent build receipt to the exact UIA workflow head and supplied receipt IDs."""
+    """Bind independent build receipt to exact UIA head, run, artifact, source and measured EXE."""
     assert isinstance(build, dict) and isinstance(preflight, dict), "INDEPENDENT_BUILD_BINDING_NOT_OBJECT"
     assert build.get("status") == "PASS_INDEPENDENT_BUILD_ONLY", "INDEPENDENT_BUILD_NOT_VERIFIED"
     assert build.get("independent_build_verified") is True, "INDEPENDENT_BUILD_NOT_VERIFIED"
-    assert build.get("workflow_head_sha") == preflight.get("workflow_head"), "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH"
+    assert preflight.get("build_workflow_head_sha") == preflight.get("workflow_head"), "BUILD_WORKFLOW_HEAD_MISMATCH"
+    assert build.get("workflow_head_sha") == preflight.get("build_workflow_head_sha"), "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH"
     assert build.get("run_id") == preflight.get("build_run_id"), "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
     assert build.get("artifact_id") == preflight.get("build_artifact_id"), "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
     assert build.get("product_source") == preflight.get("product_source"), "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
@@ -129,6 +130,7 @@ def assert_independent_build_binding_fixture(results):
     run_id, artifact_id = 123456, 789012
     preflight = {
         "workflow_head": workflow_head,
+        "build_workflow_head_sha": workflow_head,
         "product_source": SOURCE,
         "pr30_source": PR30_SOURCE,
         "exe_sha256": digest,
@@ -146,35 +148,38 @@ def assert_independent_build_binding_fixture(results):
         "exe_sha256": digest,
     }
     assert validate_independent_build_binding(build, preflight) is True
-    results.append({"case": "synthetic independent build is bound to exact UIA head, run, artifact, source and EXE SHA", "result": "PASS_SYNTHETIC"})
+    results.append({"case": "synthetic independent build bound to exact UIA head, run, artifact, source and EXE SHA", "result": "PASS_SYNTHETIC"})
     mutations = []
+    wrong_receipt_head = copy.deepcopy(preflight)
+    wrong_receipt_head["build_workflow_head_sha"] = "d" * 40
+    mutations.append(("receipt workflow head mismatch", build, wrong_receipt_head))
     wrong_head = copy.deepcopy(build)
     wrong_head["workflow_head_sha"] = "d" * 40
-    mutations.append(("wrong workflow head", wrong_head))
+    mutations.append(("independent build workflow head mismatch", wrong_head, preflight))
     wrong_run = copy.deepcopy(build)
     wrong_run["run_id"] += 1
-    mutations.append(("wrong build run ID", wrong_run))
+    mutations.append(("wrong build run ID", wrong_run, preflight))
     wrong_artifact = copy.deepcopy(build)
     wrong_artifact["artifact_id"] += 1
-    mutations.append(("wrong build artifact ID", wrong_artifact))
+    mutations.append(("wrong build artifact ID", wrong_artifact, preflight))
     wrong_source = copy.deepcopy(build)
     wrong_source["product_source"] = HEAD
-    mutations.append(("wrong frozen product source", wrong_source))
+    mutations.append(("wrong frozen product source", wrong_source, preflight))
     wrong_pr30 = copy.deepcopy(build)
     wrong_pr30["pr30_source_commit"] = SOURCE
-    mutations.append(("wrong PR30 ancestry source", wrong_pr30))
+    mutations.append(("wrong PR30 ancestry source", wrong_pr30, preflight))
     wrong_sha = copy.deepcopy(build)
     wrong_sha["exe_sha256"] = "0" * 64
-    mutations.append(("wrong independently measured EXE SHA", wrong_sha))
+    mutations.append(("wrong independently measured EXE SHA", wrong_sha, preflight))
     not_verified = copy.deepcopy(build)
     not_verified["independent_build_verified"] = False
-    mutations.append(("independent build not verified", not_verified))
+    mutations.append(("independent build not verified", not_verified, preflight))
     failed_status = copy.deepcopy(build)
     failed_status["status"] = "FAIL"
-    mutations.append(("independent build status not PASS", failed_status))
-    for label, candidate in mutations:
+    mutations.append(("independent build status not PASS", failed_status, preflight))
+    for label, candidate, candidate_preflight in mutations:
         results.append(negative("synthetic build/UIA binding " + label,
-                                lambda b=candidate: validate_independent_build_binding(b, preflight)))
+                                lambda b=candidate, p=candidate_preflight: validate_independent_build_binding(b, p)))
 
 
 def assert_uia_receipt_fixture(results):
@@ -671,6 +676,7 @@ def run_checks(results):
         "independent build workflow-head binding": "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH",
         "independent build run/artifact binding": "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH",
         "independent build PR30 binding": "INDEPENDENT_BUILD_PR30_BINDING_MISMATCH",
+        "independent build workflow-head evidence field": "independent_build_workflow_head_sha=$build.workflow_head_sha",
         "independent build failure": "INDEPENDENT_BUILD_NOT_VERIFIED",
     }
     for label, token in binding_guards.items():
