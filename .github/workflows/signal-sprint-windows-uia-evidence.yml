@@ -42,10 +42,12 @@ jobs:
       - name: Assert exact-head cloud checkout
         env:
           EXPECTED_HEAD: ${{ github.sha }}
+          DISPATCH_EXPECTED_HEAD: ${{ inputs.expected_head }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD" || { echo 'CLOUD_EXACT_HEAD_MISMATCH'; exit 1; }
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            test "${{ inputs.expected_head }}" = "$EXPECTED_HEAD" || { echo 'DISPATCH_EXPECTED_HEAD_MISMATCH'; exit 1; }
+            [[ "$DISPATCH_EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]] || { echo 'DISPATCH_EXPECTED_HEAD_INVALID'; exit 1; }
+            test "$DISPATCH_EXPECTED_HEAD" = "$EXPECTED_HEAD" || { echo 'DISPATCH_EXPECTED_HEAD_MISMATCH'; exit 1; }
           fi
       - name: Run synthetic provenance and JA/EN static contract checks
         env:
@@ -121,11 +123,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   bilingual-uia:
-    needs: cloud-revision-hold
+    needs: [cloud-provenance-fixture, cloud-revision-hold]
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123' &&
       inputs.expected_head == github.sha &&
+      needs.cloud-provenance-fixture.result == 'success' &&
       needs.cloud-revision-hold.outputs.revision_included == 'true'
     runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
     timeout-minutes: 25
@@ -258,6 +261,22 @@ jobs:
               @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
             })
             if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
+            $loadName = if ($lang -ceq 'EN') { 'Load (L)' } else { '読込 (L)' }
+            $loadCases = @($cases | Where-Object { $_.name -ceq $loadName })
+            if ($loadCases.Count -ne 1) { throw "UIA_LOAD_CASE_NOT_UNIQUE:$lang" }
+            $loadLostNodes = @($loadCases[0].lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken })
+            if ($loadLostNodes.Count -eq 0) { throw "UIA_LOAD_LOST_STATE_NOT_OBSERVED:$lang" }
+            $startName = if ($lang -ceq 'EN') { 'Start / Retry (R)' } else { '開始 / 再挑戦 (R)' }
+            $startCases = @($cases | Where-Object { $_.name -ceq $startName })
+            if ($startCases.Count -ne 1) { throw "UIA_START_CASE_NOT_UNIQUE:$lang" }
+            $startLostBefore = @($startCases[0].uia_before | Where-Object { [string]$_ -ceq $lostToken })
+            $playingToken = if ($lang -ceq 'EN') { 'ControlType.Text:PLAYING' } else { 'ControlType.Text:プレイ中' }
+            $startPlayingAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $playingToken })
+            $startLostAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $lostToken })
+            if ($startLostBefore.Count -eq 0) { throw "UIA_START_LOST_PRECONDITION_NOT_OBSERVED:$lang" }
+            if ($startPlayingAfter.Count -eq 0 -or $startLostAfter.Count -gt 0) {
+              throw "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:$lang"
+            }
           }
           # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
           # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
