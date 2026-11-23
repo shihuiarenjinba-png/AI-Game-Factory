@@ -61,24 +61,44 @@ def assert_independent_verifier_with_mock_api(results):
     spec.loader.exec_module(module)
     exe = b"synthetic-test-exe-only"
     sha = hashlib.sha256(exe).hexdigest()
-    run_id, artifact_id, member = 123456, 789012, "build/SignalSprint.exe"
+    workflow_head = "b" * 40
+    run_id, artifact_id = 123456, 789012
+    member, provenance_member = "SignalSprint.exe", "build-provenance.json"
     url = f"https://github.com/{REPO}/actions/runs/{run_id}"
-    receipt = {"source_commit": SOURCE, "exe_sha256": sha, "build_run_url": url,
-               "artifact_id": artifact_id, "artifact_exe_path": member}
-    run = {"id": run_id, "repository": {"full_name": REPO},
-           "status": "completed", "conclusion": "success", "head_sha": SOURCE,
-           "path": module.BUILD_WORKFLOW_PATH, "event": module.BUILD_WORKFLOW_EVENT}
-    artifact = {"id": artifact_id, "name": module.BUILD_ARTIFACT_PREFIX + SOURCE,
-                "expired": False,
-                "workflow_run": {"id": run_id, "head_sha": SOURCE}}
+    receipt = {
+        "source_commit": SOURCE, "workflow_head_sha": workflow_head,
+        "exe_sha256": sha, "build_run_url": url, "artifact_id": artifact_id,
+        "artifact_exe_path": member, "artifact_provenance_path": provenance_member,
+    }
+    provenance = {
+        "source_commit": SOURCE, "workflow_head_sha": workflow_head,
+        "build_run_id": run_id, "exe_sha256": sha,
+        "artifact_kind": "EXE_QA_UNSIGNED", "msix_status": "NOT_BUILT",
+        "gdk_package_verified": False, "physical_gui_verified": False,
+    }
+    run = {
+        "id": run_id, "repository": {"full_name": REPO},
+        "status": "completed", "conclusion": "success",
+        "head_sha": workflow_head, "path": module.BUILD_WORKFLOW_PATH,
+        "event": "push",
+    }
+    artifact = {
+        "id": artifact_id, "name": module.BUILD_ARTIFACT_PREFIX + SOURCE,
+        "expired": False,
+        "workflow_run": {"id": run_id, "head_sha": workflow_head},
+    }
     def archive_with_entries(entries):
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w") as z:
             for name, data in entries:
                 z.writestr(name, data)
         return output.getvalue()
-    def archive_for(data):
-        return archive_with_entries([(member, data)])
+    def archive_for(data, provenance_override=None):
+        value = provenance if provenance_override is None else provenance_override
+        return archive_with_entries([
+            (member, data),
+            (provenance_member, json.dumps(value).encode("utf-8")),
+        ])
     archive = archive_for(exe)
     def make_fetch(run_obj, artifact_obj, zip_bytes):
         def fetch(url, token, accept="application/vnd.github+json"):
@@ -97,30 +117,52 @@ def assert_independent_verifier_with_mock_api(results):
         good = module.verify(receipt, exe_path, "mock-token", fetch=fetch)
         assert good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
         assert good["exe_sha256"] == sha and good["physical_gui_verified"] is False
+        assert good["build_provenance_verified"] is True
         assert good["artifact_kind"] == "EXE_QA_UNSIGNED" and good["msix_status"] == "NOT_BUILT"
         assert good["gdk_package_verified"] is False
-        results.append({"case": "mock API approved unsigned EXE build only", "result": "PASS_SYNTHETIC"})
+        results.append({"case": "mock API exact workflow, source receipt and unsigned EXE positive", "result": "PASS_SYNTHETIC"})
         mutations = [
             ("failed build run", receipt, {**run, "conclusion": "failure"}, artifact, archive, exe),
-            ("wrong run source", receipt, {**run, "head_sha": HEAD}, artifact, archive, exe),
+            ("wrong workflow head", receipt, {**run, "head_sha": "c" * 40}, artifact, archive, exe),
             ("historical Factory core CI is not EXE build proof", receipt,
              {**run, "path": ".github/workflows/factory-ci.yml", "event": "pull_request"}, artifact, archive, exe),
-            ("pull request event is not approved build dispatch", receipt,
+            ("pull request event is not approved build", receipt,
              {**run, "event": "pull_request"}, artifact, archive, exe),
+            ("artifact belongs to other run", receipt, run,
+             {**artifact, "workflow_run": {"id": run_id + 1, "head_sha": workflow_head}}, archive, exe),
+            ("artifact workflow head mismatch", receipt, run,
+             {**artifact, "workflow_run": {"id": run_id, "head_sha": "c" * 40}}, archive, exe),
             ("wrong artifact name", receipt, run,
              {**artifact, "name": "signal-sprint-msixvc"}, archive, exe),
-            ("artifact belongs to other run", receipt, run, {**artifact, "workflow_run": {"id": run_id + 1, "head_sha": SOURCE}}, archive, exe),
-            ("artifact source mismatch", receipt, run, {**artifact, "workflow_run": {"id": run_id, "head_sha": HEAD}}, archive, exe),
+            ("artifact provenance source mismatch", receipt, run, artifact,
+             archive_for(exe, {**provenance, "source_commit": HEAD}), exe),
+            ("artifact provenance workflow head mismatch", receipt, run, artifact,
+             archive_for(exe, {**provenance, "workflow_head_sha": "c" * 40}), exe),
+            ("artifact provenance run id mismatch", receipt, run, artifact,
+             archive_for(exe, {**provenance, "build_run_id": run_id + 1}), exe),
+            ("artifact provenance EXE SHA mismatch", receipt, run, artifact,
+             archive_for(exe, {**provenance, "exe_sha256": "0" * 64}), exe),
+            ("MSIX artifact kind rejected", receipt, run, artifact,
+             archive_for(exe, {**provenance, "artifact_kind": "MSIX"}), exe),
+            ("MSIX build claim rejected", receipt, run, artifact,
+             archive_for(exe, {**provenance, "msix_status": "BUILT"}), exe),
+            ("GDK package claim rejected", receipt, run, artifact,
+             archive_for(exe, {**provenance, "gdk_package_verified": True}), exe),
+            ("physical GUI claim rejected", receipt, run, artifact,
+             archive_for(exe, {**provenance, "physical_gui_verified": True}), exe),
             ("tampered artifact EXE", receipt, run, artifact, archive_for(exe + b"tampered"), exe),
             ("tampered local EXE", receipt, run, artifact, archive, exe + b"tampered"),
             ("expired artifact", receipt, run, {**artifact, "expired": True}, archive, exe),
             ("wrong run repository", receipt, {**run, "repository": {"full_name": "other/repo"}}, artifact, archive, exe),
             ("wrong artifact id", {**receipt, "artifact_id": artifact_id + 1}, run, artifact, archive, exe),
             ("missing artifact path", {**receipt, "artifact_exe_path": "missing.exe"}, run, artifact, archive, exe),
+            ("missing artifact provenance path", {**receipt, "artifact_provenance_path": "missing.json"}, run, artifact, archive, exe),
             ("unsafe artifact traversal path", {**receipt, "artifact_exe_path": "../SignalSprint.exe"}, run, artifact, archive, exe),
+            ("unsafe provenance traversal path", {**receipt, "artifact_provenance_path": "../build-provenance.json"}, run, artifact, archive, exe),
             ("absolute artifact path", {**receipt, "artifact_exe_path": "/build/SignalSprint.exe"}, run, artifact, archive, exe),
             ("Windows artifact path", {**receipt, "artifact_exe_path": "build\\\\SignalSprint.exe"}, run, artifact, archive, exe),
-            ("duplicate artifact member", receipt, run, artifact, archive_with_entries([(member, exe), (member, exe)]), exe),
+            ("duplicate artifact member", receipt, run, artifact,
+             archive_with_entries([(member, exe), (member, exe)]), exe),
             ("corrupt artifact ZIP", receipt, run, artifact, b"not-a-valid-zip", exe),
         ]
         for label, candidate, run_obj, art_obj, zipped, local in mutations:
@@ -180,17 +222,19 @@ def run_checks(results):
         kwargs.update(update)
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
     assert_independent_verifier_with_mock_api(results)
-    # The approved builder is an unsigned EXE prototype only; it never builds MSIX or a GDK package.
-    build_workflow = pathlib.Path(".github/workflows/game-signal-sprint-windows.yml").read_text(encoding="utf-8")
+    # The proof workflow builds only an unsigned pre-GDK EXE from the immutable product source.
+    build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
     for token in (
-        "name: GAME Signal Sprint Windows EXE prototype",
-        "Upload unsigned EXE prototype (not an MSIX)",
+        "windows-frozen-source-exe:",
+        "ref: 1a349faa41663c417c40710140a4d50c79b62b78",
+        "scripts/build-windows.ps1",
         "artifact_kind = 'EXE_QA_UNSIGNED'",
-        "official_identity = 'HOLD_NOT_REGISTERED'",
         "msix_status = 'NOT_BUILT'",
+        "gdk_package_verified = $false",
+        "signal-sprint-frozen-source-exe-",
     ):
-        assert token in build_workflow, "UNSIGNED_EXE_BUILDER_CONTRACT_MISSING:" + token
-    results.append({"case": "approved builder is unsigned EXE only, not GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
+        assert token in build_workflow, "FROZEN_SOURCE_EXE_BUILDER_CONTRACT_MISSING:" + token
+    results.append({"case": "frozen source unsigned EXE builder never claims GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
     # Keep the cloud fixture aligned with the actual Windows preflight contract.
     workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
     assert "$productSource = '" + SOURCE + "'" in workflow, "WORKFLOW_PRODUCT_SOURCE_DRIFT"
@@ -263,14 +307,17 @@ def run_checks(results):
     assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
     assert "actions: read" in workflow, "GITHUB_ACTIONS_READ_PERMISSION_MISSING"
     verifier = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_NOT_DISPATCHED", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "RUN_SOURCE_MISMATCH", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_SOURCE_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
+    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     cloud_build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
     cloud_failure_guards = (
-        "failure_reason", "failure_command", "HOLD_ARTIFACT_ZIP_TOO_LARGE",
-        "HOLD_DUPLICATE_ARTIFACT_MEMBER", "HOLD_UNSAFE_ARTIFACT_MEMBER_PATH",
-        "HOLD_ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "HOLD_EXE_NOT_REGULAR_FILE",
+        "failure_reason", "failure_command", "HOLD_FROZEN_SOURCE_EXE_BUILD_FAILED",
+        "HOLD_ARTIFACT_ZIP_TOO_LARGE", "HOLD_DUPLICATE_ARTIFACT_MEMBER",
+        "HOLD_UNSAFE_ARTIFACT_MEMBER_PATH", "HOLD_ARTIFACT_UNCOMPRESSED_SIZE_LIMIT",
+        "HOLD_EXE_NOT_REGULAR_FILE", "windows-frozen-source-exe:",
+        "actions/download-artifact@v4", "artifact-id", "build-provenance.json",
+        "workflow_head_sha", "artifact_provenance_path",
     )
     def assert_cloud_build_contract(candidate):
         assert all(required in candidate for required in cloud_failure_guards), "CLOUD_BUILD_GUARD_MISSING"
