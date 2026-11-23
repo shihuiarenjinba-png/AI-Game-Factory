@@ -104,6 +104,8 @@ def safe_zip_member(name):
 def verify(receipt, exe_path, token, fetch=get):
     require(isinstance(receipt, dict), "RECEIPT_NOT_OBJECT")
     require(receipt.get("source_commit") == SOURCE, "BUILD_SOURCE_MISMATCH")
+    receipt_exe_size = receipt.get("exe_size_bytes")
+    require(type(receipt_exe_size) is int and receipt_exe_size > 0, "RECEIPT_EXE_SIZE_INVALID")
     require(isinstance(receipt.get("exe_sha256"), str) and bool(SHA.fullmatch(receipt["exe_sha256"].lower())), "RECEIPT_SHA_INVALID")
     require(isinstance(receipt.get("build_run_url"), str), "RUN_URL_MISSING")
     match = RUN.fullmatch(receipt["build_run_url"])
@@ -115,6 +117,7 @@ def verify(receipt, exe_path, token, fetch=get):
     require(isinstance(member, str) and safe_zip_member(member) and not member.endswith("/"), "ARTIFACT_EXE_PATH_INVALID")
     digest, local_size = hash_file(exe_path, MAX_EXE_BYTES, "LOCAL_EXE_TOO_LARGE")
     require(digest == receipt["exe_sha256"].lower(), "LOCAL_EXE_SHA_MISMATCH")
+    require(local_size == receipt_exe_size, "RECEIPT_EXE_SIZE_MISMATCH")
     run = json.loads(fetch(f"{API}/actions/runs/{run_id}", token))
     # The proof workflow's run head is the QA harness; the artifact separately proves
     # that its Windows job checked out the immutable product source.
@@ -178,6 +181,7 @@ def verify(receipt, exe_path, token, fetch=get):
         require(provenance.get("workflow_head_sha") == workflow_head_sha, "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH")
         require(provenance.get("build_run_id") == run_id, "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH")
         require(provenance.get("exe_sha256") == digest, "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH")
+        require(provenance.get("exe_size_bytes") == artifact_size, "ARTIFACT_PROVENANCE_EXE_SIZE_MISMATCH")
         require(provenance.get("artifact_kind") == "EXE_QA_UNSIGNED", "ARTIFACT_KIND_NOT_UNSIGNED_EXE")
         require(provenance.get("msix_status") == "NOT_BUILT", "MSIX_MUST_REMAIN_NOT_BUILT")
         require(provenance.get("gdk_package_verified") is False, "GDK_PACKAGE_MUST_NOT_BE_CLAIMED")
@@ -189,7 +193,7 @@ def verify(receipt, exe_path, token, fetch=get):
             "build_job_name": BUILD_JOB_NAME, "run_status_at_verification": run.get("status"),
             "artifact_exe_path": member, "artifact_provenance_path": provenance_member,
             "artifact_zip_sha256": archive_sha256, "artifact_zip_size_bytes": len(archive),
-            "exe_size_bytes": local_size,
+            "exe_size_bytes": local_size, "artifact_exe_size_bytes": artifact_size,
             "workflow_head_sha": workflow_head_sha, "exe_sha256": digest,
             "build_provenance_verified": True, "independent_build_verified": True,
             "physical_gui_verified": False, "artifact_kind": "EXE_QA_UNSIGNED",
