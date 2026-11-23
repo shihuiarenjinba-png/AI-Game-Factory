@@ -111,12 +111,14 @@ def verify(receipt, exe_path, token, fetch=get):
             and compare.get("ahead_by") > 0 and compare.get("behind_by") == 0,
             "PR30_SOURCE_NOT_ANCESTOR")
     base_commit = compare.get("base_commit")
-    head_commit = compare.get("head_commit")
+    commits = compare.get("commits")
     merge_base_commit = compare.get("merge_base_commit")
     require(isinstance(base_commit, dict) and base_commit.get("sha") == PR30_SOURCE
-            and isinstance(head_commit, dict) and head_commit.get("sha") == SOURCE
             and isinstance(merge_base_commit, dict) and merge_base_commit.get("sha") == PR30_SOURCE,
             "PR30_SOURCE_ANCESTRY_MISMATCH")
+    require(isinstance(commits, list) and len(commits) > 0
+            and isinstance(commits[-1], dict) and commits[-1].get("sha") == SOURCE,
+            "PR30_SOURCE_COMPARE_HEAD_MISMATCH")
     receipt_exe_size = receipt.get("exe_size_bytes")
     require(type(receipt_exe_size) is int and receipt_exe_size > 0, "RECEIPT_EXE_SIZE_INVALID")
     require(isinstance(receipt.get("exe_sha256"), str) and bool(SHA.fullmatch(receipt["exe_sha256"].lower())), "RECEIPT_SHA_INVALID")
