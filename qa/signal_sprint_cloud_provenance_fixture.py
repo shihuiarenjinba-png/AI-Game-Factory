@@ -362,7 +362,7 @@ def run_checks(results):
     for label, token in required_preflight.items():
         assert token in windows_job, "WINDOWS_PREFLIGHT_GUARD_MISSING:" + label
         results.append({"case": "Windows preflight guard " + label, "result": "PASS_STATIC_ONLY"})
-    assert "if: github.event_name == 'workflow_dispatch'" in windows_job, "UIA_MUST_REQUIRE_DISPATCH"
+    assert "github.event_name == 'workflow_dispatch'" in windows_job, "UIA_MUST_REQUIRE_DISPATCH"
     assert "if-no-files-found: warn" in windows_job, "WINDOWS_FAILURE_EVIDENCE_POLICY_DRIFT"
     # The Windows binding must reject incomplete, duplicated, or cross-language UIA evidence.
     # Static checks only: these do not certify a physical GUI run or an independent build.
