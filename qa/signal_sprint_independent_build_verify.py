@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import urllib.error
 import urllib.request
@@ -16,6 +17,10 @@ SOURCE = "1a349faa41663c417c40710140a4d50c79b62b78"
 API = "https://api.github.com/repos/" + REPO
 SHA = re.compile(r"^[0-9a-f]{64}$")
 RUN = re.compile(r"^https://github\.com/" + REPO + r"/actions/runs/([1-9][0-9]*)$")
+MAX_API_JSON_BYTES = 2 * 1024 * 1024
+MAX_ARTIFACT_ZIP_BYTES = 1024 * 1024 * 1024
+MAX_ARTIFACT_UNCOMPRESSED_BYTES = 600 * 1024 * 1024
+MAX_EXE_BYTES = 512 * 1024 * 1024
 
 
 def require(condition, reason):
@@ -31,7 +36,43 @@ def get(url, token, accept="application/vnd.github+json"):
         "User-Agent": "signal-sprint-build-provenance",
     })
     with urllib.request.urlopen(req, timeout=35) as response:
-        return response.read()
+        limit = MAX_ARTIFACT_ZIP_BYTES if accept == "application/octet-stream" else MAX_API_JSON_BYTES
+        content_length = response.headers.get("Content-Length")
+        if content_length is not None:
+            require(int(content_length) <= limit, "API_RESPONSE_TOO_LARGE")
+        data = response.read(limit + 1)
+        require(len(data) <= limit, "API_RESPONSE_TOO_LARGE")
+        return data
+
+
+def hash_stream(stream, limit, reason):
+    digest = hashlib.sha256()
+    total = 0
+    while True:
+        chunk = stream.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        require(total <= limit, reason)
+        digest.update(chunk)
+    return digest.hexdigest(), total
+
+
+def hash_file(path, limit, reason):
+    with Path(path).open("rb") as stream:
+        return hash_stream(stream, limit, reason)
+
+
+def safe_zip_member(name):
+    normalized = name[:-1] if name.endswith("/") else name
+    parts = normalized.split("/")
+    return (
+        bool(normalized)
+        and not name.startswith("/")
+        and "\\" not in name
+        and all(part not in ("", ".", "..") for part in parts)
+        and ":" not in parts[0]
+    )
 
 
 def verify(receipt, exe_path, token, fetch=get):
@@ -45,9 +86,8 @@ def verify(receipt, exe_path, token, fetch=get):
     artifact_id = receipt.get("artifact_id")
     require(type(artifact_id) is int and artifact_id > 0, "ARTIFACT_ID_INVALID")
     member = receipt.get("artifact_exe_path")
-    require(isinstance(member, str) and member and not member.startswith("/") and "\\" not in member and ".." not in member.split("/"), "ARTIFACT_EXE_PATH_INVALID")
-    exe = Path(exe_path).read_bytes()
-    digest = hashlib.sha256(exe).hexdigest()
+    require(isinstance(member, str) and safe_zip_member(member) and not member.endswith("/"), "ARTIFACT_EXE_PATH_INVALID")
+    digest, local_size = hash_file(exe_path, MAX_EXE_BYTES, "LOCAL_EXE_TOO_LARGE")
     require(digest == receipt["exe_sha256"].lower(), "LOCAL_EXE_SHA_MISMATCH")
     run = json.loads(fetch(f"{API}/actions/runs/{run_id}", token))
     require(run.get("id") == run_id and run.get("repository", {}).get("full_name") == REPO, "RUN_ID_OR_REPO_MISMATCH")
@@ -58,12 +98,21 @@ def verify(receipt, exe_path, token, fetch=get):
     require(artifact.get("workflow_run", {}).get("id") == run_id, "ARTIFACT_RUN_MISMATCH")
     require(artifact.get("workflow_run", {}).get("head_sha") == SOURCE, "ARTIFACT_SOURCE_MISMATCH")
     archive = fetch(f"{API}/actions/artifacts/{artifact_id}/zip", token, "application/octet-stream")
+    require(isinstance(archive, (bytes, bytearray)) and len(archive) <= MAX_ARTIFACT_ZIP_BYTES, "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID")
     with zipfile.ZipFile(io.BytesIO(archive)) as z:
-        names = z.namelist()
+        infos = z.infolist()
+        names = [info.filename for info in infos]
+        require(len(names) == len(set(names)), "ARTIFACT_DUPLICATE_MEMBER")
+        require(all(safe_zip_member(name) for name in names), "ARTIFACT_UNSAFE_MEMBER_PATH")
+        require(sum(info.file_size for info in infos) <= MAX_ARTIFACT_UNCOMPRESSED_BYTES, "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT")
         require(names.count(member) == 1, "ARTIFACT_EXE_MISSING_OR_DUPLICATE")
-        require(not z.getinfo(member).is_dir(), "ARTIFACT_MEMBER_NOT_FILE")
-        with z.open(member) as stream:
-            artifact_digest = hashlib.sha256(stream.read()).hexdigest()
+        info = z.getinfo(member)
+        mode = (info.external_attr >> 16) & 0o170000
+        require(not info.is_dir() and mode in (0, stat.S_IFREG), "ARTIFACT_MEMBER_NOT_REGULAR_FILE")
+        require(info.file_size <= MAX_EXE_BYTES, "ARTIFACT_EXE_TOO_LARGE")
+        with z.open(info) as stream:
+            artifact_digest, artifact_size = hash_stream(stream, MAX_EXE_BYTES, "ARTIFACT_EXE_TOO_LARGE")
+        require(artifact_size == info.file_size, "ARTIFACT_EXE_SIZE_MISMATCH")
     require(artifact_digest == digest, "ARTIFACT_EXE_SHA_MISMATCH")
     return {"schema": "signal-sprint-independent-build-v1",
             "status": "PASS_INDEPENDENT_BUILD_ONLY", "product_source": SOURCE,
