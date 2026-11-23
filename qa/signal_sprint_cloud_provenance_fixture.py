@@ -319,17 +319,16 @@ def run_checks(results):
     assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
     assert "actions: read" in workflow, "GITHUB_ACTIONS_READ_PERMISSION_MISSING"
     verifier = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
+    for token in ("BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_MISSING_OR_DUPLICATE", "ARTIFACT_PROVENANCE_NOT_REGULAR_FILE", "ARTIFACT_PROVENANCE_TOO_LARGE", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID", "ARTIFACT_DUPLICATE_MEMBER", "ARTIFACT_UNSAFE_MEMBER_PATH", "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "ARTIFACT_MEMBER_NOT_REGULAR_FILE", "ARTIFACT_EXE_TOO_LARGE", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
     cloud_build_workflow = pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_text(encoding="utf-8")
     cloud_failure_guards = (
         "failure_reason", "failure_command", "HOLD_FROZEN_SOURCE_EXE_BUILD_FAILED",
-        "HOLD_ARTIFACT_ZIP_TOO_LARGE", "HOLD_DUPLICATE_ARTIFACT_MEMBER",
-        "HOLD_UNSAFE_ARTIFACT_MEMBER_PATH", "HOLD_ARTIFACT_UNCOMPRESSED_SIZE_LIMIT",
-        "HOLD_EXE_NOT_REGULAR_FILE", "windows-frozen-source-exe:",
+        "HOLD_INDEPENDENT_VERIFICATION_FAILED", "HOLD_INDEPENDENT_VERIFICATION_INCOMPLETE",
+        "HOLD_ARTIFACT_DOWNLOAD_FAILED", "windows-frozen-source-exe:",
         "actions/download-artifact@v4", "artifact-id", "build-provenance.json",
-        "workflow_head_sha", "artifact_provenance_path",
+        "workflow_head_sha", "artifact_provenance_path", "if: always()",
     )
     def assert_cloud_build_contract(candidate):
         assert all(required in candidate for required in cloud_failure_guards), "CLOUD_BUILD_GUARD_MISSING"
@@ -339,6 +338,8 @@ def run_checks(results):
         assert changed != cloud_build_workflow, "CLOUD_BUILD_MUTATION_NO_EFFECT:" + token
         results.append(negative("cloud build workflow mutation reject " + token,
                                 lambda candidate=changed: assert_cloud_build_contract(candidate)))
+    assert "vars.SIGNAL_SPRINT_BUILD_RUN_ID" not in cloud_build_workflow, "MANUAL_BUILD_RUN_VARIABLE_MUST_NOT_BE_REQUIRED"
+    assert "vars.SIGNAL_SPRINT_BUILD_ARTIFACT_ID" not in cloud_build_workflow, "MANUAL_BUILD_ARTIFACT_VARIABLE_MUST_NOT_BE_REQUIRED"
     # Check the real UIA gate source, not only self-declared fixture constants.
     gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
     assert_gate_contract(gate)
