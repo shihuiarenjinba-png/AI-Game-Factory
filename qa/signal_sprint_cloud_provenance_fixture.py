@@ -831,6 +831,7 @@ def run_checks(results):
         "build run ID parsed from trusted URL": "$buildRunId = [long]$buildRunMatch.Groups[1].Value",
         "build run ID validation": "BUILD_RUN_ID_INVALID",
         "build artifact ID validation": "BUILD_ARTIFACT_ID_INVALID",
+        "preflight measured EXE size": "exe_size_bytes=$exeSize",
         "preflight build run ID": "build_run_id=$buildRunId",
         "preflight build artifact ID": "build_artifact_id=$buildArtifactId",
         "preflight build workflow head": "build_workflow_head_sha=$receipt.workflow_head_sha",
@@ -867,6 +868,12 @@ def run_checks(results):
         "independent build workflow-head binding": "INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH",
         "independent build run/artifact binding": "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH",
         "independent build PR30 binding": "INDEPENDENT_BUILD_PR30_BINDING_MISMATCH",
+        "independent build run URL binding": "INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH",
+        "independent build EXE size binding": "INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH",
+        "independent artifact ZIP digest guard": "INDEPENDENT_BUILD_ARTIFACT_DIGEST_INVALID",
+        "independent build run URL receipt": "build_run_url=$build.build_run_url",
+        "independent build EXE size receipt": "exe_size_bytes=$build.exe_size_bytes",
+        "independent artifact ZIP digest receipt": "artifact_zip_sha256=$build.artifact_zip_sha256",
         "independent build workflow-head evidence field": "independent_build_workflow_head_sha=$build.workflow_head_sha",
         "independent build failure": "INDEPENDENT_BUILD_NOT_VERIFIED",
     }
@@ -892,6 +899,7 @@ def run_checks(results):
     for token in ("EXPECTED_BUILD_RUN_ID_INVALID", "EXPECTED_BUILD_RUN_ID_MISMATCH",
                   "EXPECTED_BUILD_WORKFLOW_HEAD_INVALID", "EXPECTED_BUILD_WORKFLOW_HEAD_MISMATCH",
                   "expected_run_id", "expected_workflow_head",
+                  '"build_run_url": receipt["build_run_url"]', "artifact_zip_size_bytes",
                   "BUILD_WORKFLOW_PATH_MISMATCH", "BUILD_WORKFLOW_EVENT_INVALID", "WORKFLOW_HEAD_SHA_INVALID", "WORKFLOW_HEAD_MISMATCH", "RUN_NOT_ACTIVE_OR_COMPLETE", "RUN_JOBS_INVALID", "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE", "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS", "BUILD_ARTIFACT_NAME_MISMATCH", "RUN_NOT_SUCCESS", "ARTIFACT_RUN_MISMATCH", "ARTIFACT_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_PATH_INVALID", "ARTIFACT_PROVENANCE_MISSING_OR_DUPLICATE", "ARTIFACT_PROVENANCE_NOT_REGULAR_FILE", "ARTIFACT_PROVENANCE_TOO_LARGE", "ARTIFACT_PROVENANCE_SOURCE_MISMATCH", "ARTIFACT_PROVENANCE_WORKFLOW_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_RUN_ID_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SHA_MISMATCH", "ARTIFACT_PROVENANCE_EXE_SIZE_MISMATCH", "RECEIPT_EXE_SIZE_INVALID", "RECEIPT_EXE_SIZE_MISMATCH", "ARTIFACT_KIND_NOT_UNSIGNED_EXE", "MSIX_MUST_REMAIN_NOT_BUILT", "GDK_PACKAGE_MUST_NOT_BE_CLAIMED", "PHYSICAL_GUI_MUST_NOT_BE_CLAIMED", "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID", "ARTIFACT_DIGEST_INVALID", "ARTIFACT_ARCHIVE_DIGEST_MISMATCH", "LOCAL_EXE_SIZE_MISMATCH", "artifact_zip_sha256", "url.endswith(\"/zip\")", "application/vnd.github+json", "SafeRedirectHandler", "redirected.remove_header(name)", "Authorization", "HTTP_ERROR_", "ARTIFACT_DUPLICATE_MEMBER", "ARTIFACT_UNSAFE_MEMBER_PATH", "ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "ARTIFACT_MEMBER_NOT_REGULAR_FILE", "ARTIFACT_EXE_TOO_LARGE", "LOCAL_EXE_SHA_MISMATCH", "PASS_INDEPENDENT_BUILD_ONLY", "EXE_QA_UNSIGNED", "NOT_BUILT", "gdk_package_verified"):
         assert token in verifier, "INDEPENDENT_VERIFIER_GUARD_MISSING:" + token
     results.append({"case": "workflow source and evidence upload contract", "result": "PASS_STATIC_ONLY"})
