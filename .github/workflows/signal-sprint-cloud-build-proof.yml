@@ -369,6 +369,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Run GDK package readiness contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
       - name: Generate read-only GDK package readiness HOLD receipt
         if: always()
         shell: bash
