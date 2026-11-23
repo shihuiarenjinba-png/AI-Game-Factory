@@ -95,7 +95,7 @@ def assert_independent_verifier_with_mock_api(results):
     compare = {
         "status": "ahead", "ahead_by": 11, "behind_by": 0,
         "base_commit": {"sha": module.PR30_SOURCE},
-        "head_commit": {"sha": module.SOURCE},
+        "commits": [{"sha": module.SOURCE}],
         "merge_base_commit": {"sha": module.PR30_SOURCE},
     }
     def archive_with_entries(entries):
@@ -162,7 +162,7 @@ def assert_independent_verifier_with_mock_api(results):
             fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "merge_base_commit": {"sha": SOURCE}}))))
         results.append(negative("mock API PR30 compare wrong frozen source head", lambda: module.verify(
             receipt, exe_path, "mock-token",
-            fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "head_commit": {"sha": HEAD}}))))
+            fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "commits": [{"sha": HEAD}]}))))
         results.append(negative("mock API PR30 compare wrong base commit", lambda: module.verify(
             receipt, exe_path, "mock-token",
             fetch=make_fetch(run, artifact, archive, compare_obj={**compare, "base_commit": {"sha": SOURCE}}))))
@@ -327,9 +327,10 @@ def run_checks(results):
     ):
         assert token in build_workflow, "FROZEN_SOURCE_EXE_BUILDER_CONTRACT_MISSING:" + token
     verifier_source = pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_text(encoding="utf-8")
-    for token in ("PR30_SOURCE = 'a377043d3c9ab0c71d9a100cdb841dd7000313b9'", "PR30_SOURCE_RECEIPT_MISMATCH",
+    for token in ('PR30_SOURCE = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"', "PR30_SOURCE_RECEIPT_MISMATCH",
                   "PR30_SOURCE_NOT_ANCESTOR", "PR30_SOURCE_ANCESTRY_MISMATCH",
-                  "ARTIFACT_PROVENANCE_PR30_SOURCE_MISMATCH", "pr30_ancestry_verified"):
+                  "PR30_SOURCE_COMPARE_HEAD_MISMATCH", "ARTIFACT_PROVENANCE_PR30_SOURCE_MISMATCH",
+                  "pr30_ancestry_verified"):
         assert token in verifier_source, "INDEPENDENT_PR30_ANCESTRY_GUARD_MISSING:" + token
     results.append({"case": "independent verifier proves fixed PR30 source is ancestor of frozen build source", "result": "PASS_STATIC_ONLY"})
     results.append({"case": "frozen source unsigned EXE builder never claims GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
