@@ -21,6 +21,7 @@ BUILD_WORKFLOW_PATH = ".github/workflows/signal-sprint-cloud-build-proof.yml"
 BUILD_WORKFLOW_EVENTS = {"push", "workflow_dispatch"}
 BUILD_ARTIFACT_PREFIX = "signal-sprint-frozen-source-exe-"
 MAX_BUILD_PROVENANCE_BYTES = 1024 * 1024
+BUILD_JOB_NAME = "windows-frozen-source-exe"
 MAX_API_JSON_BYTES = 2 * 1024 * 1024
 MAX_ARTIFACT_ZIP_BYTES = 1024 * 1024 * 1024
 MAX_ARTIFACT_UNCOMPRESSED_BYTES = 600 * 1024 * 1024
@@ -102,7 +103,16 @@ def verify(receipt, exe_path, token, fetch=get):
     require(isinstance(workflow_head_sha, str) and bool(re.fullmatch(r"[0-9a-f]{40}", workflow_head_sha)), "WORKFLOW_HEAD_SHA_INVALID")
     require(run.get("head_sha") == workflow_head_sha, "WORKFLOW_HEAD_MISMATCH")
     require(run.get("id") == run_id and run.get("repository", {}).get("full_name") == REPO, "RUN_ID_OR_REPO_MISMATCH")
-    require(run.get("status") == "completed" and run.get("conclusion") == "success", "RUN_NOT_SUCCESS")
+    require(run.get("status") in ("in_progress", "completed"), "RUN_NOT_ACTIVE_OR_COMPLETE")
+    if run.get("status") == "completed":
+        require(run.get("conclusion") == "success", "RUN_NOT_SUCCESS")
+    jobs_payload = json.loads(fetch(f"{API}/actions/runs/{run_id}/jobs?per_page=100", token))
+    jobs = jobs_payload.get("jobs")
+    require(isinstance(jobs, list), "RUN_JOBS_INVALID")
+    build_jobs = [job for job in jobs if job.get("name") == BUILD_JOB_NAME]
+    require(len(build_jobs) == 1, "FROZEN_SOURCE_BUILD_JOB_NOT_UNIQUE")
+    require(build_jobs[0].get("status") == "completed" and build_jobs[0].get("conclusion") == "success",
+            "FROZEN_SOURCE_BUILD_JOB_NOT_SUCCESS")
     artifact = json.loads(fetch(f"{API}/actions/artifacts/{artifact_id}", token))
     require(artifact.get("id") == artifact_id and not artifact.get("expired", True), "ARTIFACT_INVALID_OR_EXPIRED")
     require(artifact.get("name") == BUILD_ARTIFACT_PREFIX + SOURCE, "BUILD_ARTIFACT_NAME_MISMATCH")
@@ -148,6 +158,7 @@ def verify(receipt, exe_path, token, fetch=get):
     return {"schema": "signal-sprint-independent-build-v1",
             "status": "PASS_INDEPENDENT_BUILD_ONLY", "product_source": SOURCE,
             "run_id": run_id, "artifact_id": artifact_id,
+            "build_job_name": BUILD_JOB_NAME, "run_status_at_verification": run.get("status"),
             "artifact_exe_path": member, "artifact_provenance_path": provenance_member,
             "workflow_head_sha": workflow_head_sha, "exe_sha256": digest,
             "build_provenance_verified": True, "independent_build_verified": True,
