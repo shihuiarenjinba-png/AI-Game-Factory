@@ -35,7 +35,7 @@ from signal_sprint_gdk_review_gate import (
 QA_SOURCE_SHA = "1a349faa41663c417c40710140a4d50c79b62b78"
 PR30_SOURCE_SHA = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
 REQUIRED_WIN_LOSE_SHA = "9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2"
-PROVISIONER_REPO = "https://github.com/shihuiarenjinba/Repository-Provisioner-game.git"
+PROVISIONER_REPO = "https://github.com/shihuiarenjinba-png/Repository-Provisioner-game.git"
 CAS_BRANCH = "codex/game-signal-sprint-gdk-cas-c058cbf7fe38"
 BUILD_BRANCH_PREFIX = "codex/game-signal-sprint-gdk-build-"
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -216,6 +216,8 @@ def _validate_build_proof(proof_path: Path, env: dict):
         "independent_build_verified": True,
         "build_provenance_verified": True,
         "run_id": run_id,
+        "run_url": f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{run_id}",
+        "artifact_url": f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{run_id}/artifacts/{artifact_id}",
         "run_status_at_verification": proof.get("run_status_at_verification"),
         "workflow_head_sha": proof["workflow_head_sha"],
         "product_source_sha": proof["product_source"],
@@ -308,7 +310,13 @@ def compose_receipt(*, contract, identity_fields, preflight, build, ancestry, re
             "pr30_source_is_ancestor_of_qa_source": ancestry.get("pr30_source_is_ancestor_of_qa_source"),
             "required_win_lose_revision_sha": REQUIRED_WIN_LOSE_SHA,
             "required_revision_is_in_qa_product_source": ancestry.get("required_revision_is_ancestor_of_qa_source"),
-            "status": "HOLD_GDK_IDENTITY_BOUND_TO_OLDER_SOURCE_AND_REQUIRED_REVISION_ABSENT",
+            "status": (
+                "HOLD_GDK_IDENTITY_BOUND_TO_OLDER_SOURCE"
+                if gdk_source != QA_SOURCE_SHA
+                else ("HOLD_REQUIRED_REVISION_NOT_IN_SOURCE"
+                      if ancestry.get("required_revision_is_ancestor_of_qa_source") is not True
+                      else "CHECK_ONLY_SOURCE_ALIGNMENT")
+            ),
         },
         "current_qa_build": build,
         "pinned_original_gdk_artifact": {
