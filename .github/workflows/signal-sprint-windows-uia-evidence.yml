@@ -61,6 +61,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   cloud-revision-hold:
+    outputs:
+      revision_included: ${{ steps.preflight.outputs.revision_included }}
+      preflight_status: ${{ steps.preflight.outputs.preflight_status }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -69,12 +72,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Record frozen source revision inclusion before physical UIA
+        id: preflight
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           python3 - <<'PY'
           import json
+          import os
           import subprocess
           from pathlib import Path
           source = '1a349faa41663c417c40710140a4d50c79b62b78'
@@ -97,11 +102,15 @@ jobs:
               'product_acceptance': False,
           }
           Path('evidence/cloud-revision-preflight.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('revision_included=' + ('true' if included else 'false') + '\n')
+              output.write('preflight_status=' + result['status'] + '\n')
           if not source_exists or not revision_exists:
               raise SystemExit('MISSING_REQUIRED_GIT_OBJECT')
           if included:
-              raise SystemExit('FIXTURE_EXPECTED_REVISION_MISMATCH_NO_LONGER_PRESENT_REVIEW_FREEZE')
-          print('EXPECTED_PRODUCT_HOLD: frozen source lacks required WIN/LOSE revision; GUI not attested')
+              print('REVISION_INCLUDED: physical UIA may proceed only on explicit exact-head dispatch')
+          else:
+              print('EXPECTED_PRODUCT_HOLD: frozen source lacks required WIN/LOSE revision; GUI not attested')
           PY
       - name: Upload independent revision preflight
         if: always()
@@ -112,7 +121,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   bilingual-uia:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/signal-sprint-uia-fixture-20261110'
+    needs: cloud-revision-hold
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123' &&
+      inputs.expected_head == github.sha &&
+      needs.cloud-revision-hold.outputs.revision_included == 'true'
     runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
     timeout-minutes: 25
     steps:

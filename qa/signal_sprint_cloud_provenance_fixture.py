@@ -304,6 +304,38 @@ def run_checks(results):
     # Assert evidence upload semantics, not merely artifact-name strings.
     cloud_job = workflow.split("  cloud-provenance-fixture:", 1)[1].split("  bilingual-uia:", 1)[0]
     windows_job = workflow.split("  bilingual-uia:", 1)[1]
+    # The self-hosted GDK desktop must not be allocated for a known frozen-source
+    # revision HOLD. A hosted preflight exports the decision; only an explicit
+    # exact-head dispatch with revision inclusion may schedule physical UIA.
+    runner_gate_tokens = {
+        "preflight step id": "id: preflight",
+        "revision output": "revision_included: ${{ steps.preflight.outputs.revision_included }}",
+        "preflight status output": "preflight_status: ${{ steps.preflight.outputs.preflight_status }}",
+        "output file binding": "GITHUB_OUTPUT",
+        "hosted dependency": "needs: cloud-revision-hold",
+        "exact dispatch head": "inputs.expected_head == github.sha",
+        "revision inclusion gate": "needs.cloud-revision-hold.outputs.revision_included == 'true'",
+        "current QA branch gate": "github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123'",
+        "expected hold remains observable": "EXPECTED_PRODUCT_HOLD:",
+        "included revision path": "REVISION_INCLUDED:",
+    }
+    def assert_runner_gate_contract(candidate):
+        revision_section = candidate.split("  cloud-revision-hold:", 1)[1].split("  bilingual-uia:", 1)[0]
+        physical_header = candidate.split("  bilingual-uia:", 1)[1].split("    runs-on:", 1)[0]
+        for label, token in runner_gate_tokens.items():
+            section = physical_header if label in {
+                "hosted dependency", "exact dispatch head", "revision inclusion gate",
+                "current QA branch gate"
+            } else revision_section
+            assert token in section, "PHYSICAL_UIA_RUNNER_GATE_MISSING:" + label
+        assert "FIXTURE_EXPECTED_REVISION_MISMATCH_NO_LONGER_PRESENT_REVIEW_FREEZE" not in revision_section, "EXPECTED_HOLD_MUST_NOT_FAIL_CLOUD_JOB"
+    assert_runner_gate_contract(workflow)
+    for label, token in runner_gate_tokens.items():
+        changed = workflow.replace(token, "REMOVED_BY_MUTATION_TEST")
+        assert changed != workflow, "RUNNER_GATE_MUTATION_NO_EFFECT:" + label
+        results.append(negative("physical UIA runner gate mutation reject " + label,
+                                lambda candidate=changed: assert_runner_gate_contract(candidate)))
+    results.append({"case": "physical UIA runner gated by hosted exact-head revision preflight", "result": "PASS_STATIC_ONLY"})
     assert "runs-on: ubuntu-latest" in cloud_job, "CLOUD_JOB_NOT_HOSTED"
     assert "python3 qa/signal_sprint_cloud_provenance_fixture.py" in cloud_job, "CLOUD_FIXTURE_NOT_EXECUTED"
     assert "if: always()" in cloud_job, "CLOUD_FAILURE_EVIDENCE_NOT_GUARANTEED"
