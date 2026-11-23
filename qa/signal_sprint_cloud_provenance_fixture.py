@@ -126,9 +126,13 @@ def assert_independent_verifier_with_mock_api(results):
         assert good["artifact_kind"] == "EXE_QA_UNSIGNED" and good["msix_status"] == "NOT_BUILT"
         assert good["gdk_package_verified"] is False
         results.append({"case": "mock API exact workflow, source receipt and unsigned EXE positive", "result": "PASS_SYNTHETIC"})
+        queued_good = module.verify(receipt, exe_path, "mock-token",
+                                    fetch=make_fetch({**run, "status": "queued"}, artifact, archive))
+        assert queued_good["status"] == "PASS_INDEPENDENT_BUILD_ONLY"
+        results.append({"case": "queued overall run with completed Windows build job is accepted", "result": "PASS_SYNTHETIC"})
         mutations = [
             ("failed completed workflow run", receipt, {**run, "status": "completed", "conclusion": "failure"}, artifact, archive, exe),
-            ("invalid queued workflow run", receipt, {**run, "status": "queued"}, artifact, archive, exe),
+            ("cancelled workflow run", receipt, {**run, "status": "cancelled"}, artifact, archive, exe),
             ("missing frozen source build job", receipt,
              {**run, "_mock_jobs": {"jobs": []}}, artifact, archive, exe),
             ("duplicate frozen source build jobs", receipt,
