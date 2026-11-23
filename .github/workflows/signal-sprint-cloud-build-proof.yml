@@ -10,7 +10,14 @@ on:
       - 'qa/signal_sprint_independent_build_verify.py'
       - 'qa/signal_sprint_gdk_package_readiness.py'
       - 'products/signal-sprint/tests/test_gdk_package_readiness.py'
+      - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
+      - 'products/signal-sprint/tests/test_gdk_sdk_capability_probe.py'
   workflow_dispatch:
+    inputs:
+      expected_gdk_sdk_version:
+        description: Explicitly reviewed GDK SDK ProductVersion/FileVersion for read-only comparison only
+        required: false
+        type: string
 permissions:
   contents: read
   actions: read
@@ -40,6 +47,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Test read-only GDK SDK capability probe
+        shell: pwsh
+        run: |
+          python products/signal-sprint/tests/test_gdk_sdk_capability_probe.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'GDK_SDK_CAPABILITY_TESTS_FAILED' }
+      - name: Probe installed Windows GDK SDK and MakePkg without executing tools
+        shell: pwsh
+        env:
+          EXPECTED_GDK_SDK_VERSION: ${{ inputs.expected_gdk_sdk_version }}
+        run: |
+          python qa/signal_sprint_gdk_sdk_capability_probe.py --output evidence/gdk-sdk-capability.json --expected-version "$env:EXPECTED_GDK_SDK_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'GDK_SDK_CAPABILITY_PROBE_INTERNAL_FAILURE' }
+      - name: Upload read-only Windows GDK SDK capability receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/gdk-sdk-capability.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Assert exact frozen source checkout
         id: source
         shell: pwsh
