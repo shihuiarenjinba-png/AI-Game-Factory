@@ -2,6 +2,7 @@
 """Deterministic tests for the read-only GDK SDK capability probe."""
 from __future__ import annotations
 
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -106,7 +107,7 @@ class GdkSdkCapabilityProbeTests(unittest.TestCase):
         self.assertFalse(result["physical_gui_verified"])
         self.assertFalse(result["gdk_package_verified"])
         self.assertFalse(result["ordinary_msix_allowed"])
-        self.assertEqual(result["makepkg"]["sha256"], result["makepkg"]["sha256"])
+        self.assertEqual(result["makepkg"]["sha256"], hashlib.sha256(self.makepkg.read_bytes()).hexdigest())
         self.assertEqual(result["build_run_id"], 12345)
 
 
