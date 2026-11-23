@@ -258,6 +258,9 @@ jobs:
           $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
           if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
           if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
+          if ([string]$build.workflow_head_sha -cne [string]$preflight.build_workflow_head_sha -or [string]$build.workflow_head_sha -cne [string]$preflight.workflow_head) { throw 'INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH' }
+          if ([long]$build.run_id -ne [long]$preflight.build_run_id -or [long]$build.artifact_id -ne [long]$preflight.build_artifact_id) { throw 'INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH' }
+          if ($build.pr30_source_commit -cne $preflight.pr30_source) { throw 'INDEPENDENT_BUILD_PR30_BINDING_MISMATCH' }
           if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
           if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
           if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
