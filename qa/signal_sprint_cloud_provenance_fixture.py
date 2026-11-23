@@ -376,10 +376,12 @@ def run_checks(results):
         "HOLD_INDEPENDENT_VERIFICATION_FAILED", "HOLD_INDEPENDENT_VERIFICATION_INCOMPLETE",
         "HOLD_ARTIFACT_DOWNLOAD_FAILED", "windows-frozen-source-exe:",
         "actions/download-artifact@v4", "artifact-id", "merge-multiple: true", "build-provenance.json",
-        "workflow_head_sha", "artifact_provenance_path", "if: always()",
+        "workflow_head_sha", "artifact_provenance_path", "exe_size_bytes",
+        "OpenRead(", "$stream.Read($mz, 0, 2)", "$stream.Dispose()", "if: always()",
     )
     def assert_cloud_build_contract(candidate):
         assert all(required in candidate for required in cloud_failure_guards), "CLOUD_BUILD_GUARD_MISSING"
+        assert "ReadAllBytes" not in candidate, "PE_HEADER_MUST_USE_STREAMING_READ"
     for token in cloud_failure_guards:
         assert token in cloud_build_workflow, "CLOUD_BUILD_GUARD_MISSING:" + token
         changed = cloud_build_workflow.replace(token, "REMOVED_BY_MUTATION_TEST")
