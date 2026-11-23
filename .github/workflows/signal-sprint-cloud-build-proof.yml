@@ -172,6 +172,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.windows-frozen-source-exe.outputs.artifact_id }}
           path: /tmp/signal-sprint-build
+          merge-multiple: true
       - name: Create receipt and independently verify run, artifact and EXE bytes
         if: needs.windows-frozen-source-exe.result == 'success' && steps.download.outcome == 'success'
         shell: bash
