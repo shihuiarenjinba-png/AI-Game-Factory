@@ -239,7 +239,9 @@ def run_checks(results):
     for token in (
         "windows-frozen-source-exe:",
         "ref: 1a349faa41663c417c40710140a4d50c79b62b78",
-        "scripts/build-windows.ps1",
+        "Pillow==11.3.0",
+        "pyinstaller==6.16.0",
+        "python -m PyInstaller --noconfirm --clean --onefile --windowed",
         "artifact_kind = 'EXE_QA_UNSIGNED'",
         "msix_status = 'NOT_BUILT'",
         "gdk_package_verified = $false",
