@@ -4,6 +4,9 @@ on:
     branches: [codex/signal-sprint-cloud-build-proof-20261123]
     paths:
       - '.github/workflows/signal-sprint-cloud-build-proof.yml'
+      - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
+      - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_uia_dynamic_gate.ps1'
       - 'qa/signal_sprint_independent_build_verify.py'
   workflow_dispatch:
 permissions:
