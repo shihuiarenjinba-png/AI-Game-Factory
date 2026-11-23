@@ -251,13 +251,14 @@ def run_checks(results):
         "HOLD_DUPLICATE_ARTIFACT_MEMBER", "HOLD_UNSAFE_ARTIFACT_MEMBER_PATH",
         "HOLD_ARTIFACT_UNCOMPRESSED_SIZE_LIMIT", "HOLD_EXE_NOT_REGULAR_FILE",
     )
+    def assert_cloud_build_contract(candidate):
+        assert all(required in candidate for required in cloud_failure_guards), "CLOUD_BUILD_GUARD_MISSING"
     for token in cloud_failure_guards:
         assert token in cloud_build_workflow, "CLOUD_BUILD_GUARD_MISSING:" + token
         changed = cloud_build_workflow.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
         assert changed != cloud_build_workflow, "CLOUD_BUILD_MUTATION_NO_EFFECT:" + token
         results.append(negative("cloud build workflow mutation reject " + token,
-                                lambda candidate=changed: assert all(
-                                    required in candidate for required in cloud_failure_guards)))
+                                lambda candidate=changed: assert_cloud_build_contract(candidate)))
     # Check the real UIA gate source, not only self-declared fixture constants.
     gate = pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_text(encoding="utf-8")
     assert_gate_contract(gate)
