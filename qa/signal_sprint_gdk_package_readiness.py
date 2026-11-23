@@ -47,6 +47,7 @@ ROUTE = {
 }
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}$")
 MICROSOFT_CN_RE = re.compile(r"(?:^|,\s*)CN=Microsoft Corporation(?:,|$)", re.IGNORECASE)
 
 

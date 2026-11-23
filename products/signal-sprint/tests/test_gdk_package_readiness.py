@@ -156,7 +156,7 @@ def good_sdk_capability():
         "sdk_root_source": "DOCUMENTED_DEFAULT_INSTALL_ROOT",
         "expected_sdk_version": "10.0.26100.1",
         "workflow_head_sha": "5" * 40,
-        "build_run_id": 45257822887,
+        "build_run_id": 45213585866,
         "makepkg": component,
         "submission_validator": validator,
         "read_only": True,
@@ -278,7 +278,7 @@ class GdkPackageReadinessTests(unittest.TestCase):
         self.assertTrue(result["receipt_verified"])
         self.assertTrue(result["toolchain_capability_verified"])
         self.assertEqual(result["workflow_head_sha"], "5" * 40)
-        self.assertEqual(result["build_run_id"], 45257822887)
+        self.assertEqual(result["build_run_id"], 45213585866)
 
     def test_sdk_capability_artifact_missing_or_unbound_is_hold(self):
         with tempfile.TemporaryDirectory() as tmp:
