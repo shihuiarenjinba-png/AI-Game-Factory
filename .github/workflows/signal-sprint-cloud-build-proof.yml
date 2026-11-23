@@ -8,6 +8,8 @@ on:
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
       - 'qa/signal_sprint_uia_dynamic_gate.ps1'
       - 'qa/signal_sprint_independent_build_verify.py'
+      - 'qa/signal_sprint_gdk_package_readiness.py'
+      - 'products/signal-sprint/tests/test_gdk_package_readiness.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -325,5 +327,62 @@ jobs:
         with:
           name: signal-sprint-independent-cloud-build-proof
           path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+gdk-package-readiness:
+    if: always()
+    needs: [windows-frozen-source-exe, independent-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_BUILD_RESULT: \${{ needs.windows-frozen-source-exe.result }}
+      INDEPENDENT_BUILD_RESULT: \${{ needs.independent-build.result }}
+      BUILD_ARTIFACT_ID: \${{ needs.windows-frozen-source-exe.outputs.artifact_id }}
+      BUILD_EXE_SHA256: \${{ needs.windows-frozen-source-exe.outputs.exe_sha256 }}
+      PRODUCT_SOURCE_SHA: \${{ needs.windows-frozen-source-exe.outputs.product_source_sha }}
+      PR30_SOURCE_SHA: \${{ needs.windows-frozen-source-exe.outputs.pr30_source_sha }}
+      WORKFLOW_HEAD_SHA: \${{ github.sha }}
+      BUILD_RUN_ID: \${{ github.run_id }}
+    steps:
+      - name: Checkout exact QA head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact Provisioner PR53 contract as data only
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: provisioner
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download same-run independent build receipt
+        if: always()
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: signal-sprint-independent-cloud-build-proof
+          path: evidence/build-proof
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate read-only GDK package readiness HOLD receipt
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
+            --provisioner-checkout provisioner \
+            --factory-checkout factory \
+            --build-proof evidence/build-proof/independent-build-receipt.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload GDK package readiness receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
           if-no-files-found: error
           retention-days: 30
