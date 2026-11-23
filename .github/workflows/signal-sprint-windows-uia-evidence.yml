@@ -738,6 +738,16 @@ jobs:
         with:
           name: signal-sprint-completed-build-attestation
           path: evidence/attestation
+      - name: Download read-only GDK SDK capability receipt from the exact completed build run
+        if: always() && env.BUILD_RUN_ID != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/sdk-capability
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.BUILD_RUN_ID }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -752,6 +762,7 @@ jobs:
             --provisioner-checkout provisioner \
             --factory-checkout factory \
             --completed-build-attestation evidence/attestation/completed-build-attestation.json \
+            --sdk-capability-receipt evidence/sdk-capability/gdk-sdk-capability.json \
             --output evidence/gdk-package-readiness.json
       - name: Upload completed-run GDK package-readiness receipt
         if: always()

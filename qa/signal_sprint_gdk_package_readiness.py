@@ -47,6 +47,7 @@ ROUTE = {
 }
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+MICROSOFT_CN_RE = re.compile(r"(?:^|,\s*)CN=Microsoft Corporation(?:,|$)", re.IGNORECASE)
 
 
 def _assigned(tree, key, scope=None):
@@ -307,6 +308,121 @@ def _validate_build_proof(proof_path: Path, env: dict):
     }
 
 
+def _validate_sdk_capability(path: Path | None, build: dict):
+    """Validate the read-only Windows SDK capability receipt against the completed build."""
+    if path is None:
+        return {
+            "status": "HOLD_GDK_SDK_CAPABILITY_ARTIFACT_UNAVAILABLE",
+            "receipt_verified": False,
+            "toolchain_capability_verified": False,
+            "errors": ["SDK_CAPABILITY_ARTIFACT_NOT_SUPPLIED"],
+        }
+    try:
+        probe = _read_json(path)
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        return {
+            "status": "HOLD_GDK_SDK_CAPABILITY_PROOF_UNAVAILABLE",
+            "receipt_verified": False,
+            "toolchain_capability_verified": False,
+            "errors": [str(exc) or type(exc).__name__],
+        }
+
+    errors = []
+    if probe.get("schema") != "signal-sprint-gdk-sdk-capability-v1":
+        errors.append("SDK_CAPABILITY_SCHEMA_MISMATCH")
+    if probe.get("read_only") is not True:
+        errors.append("SDK_CAPABILITY_NOT_READ_ONLY")
+    if probe.get("host_os") != "Windows":
+        errors.append("SDK_CAPABILITY_WINDOWS_HOST_NOT_VERIFIED")
+    if probe.get("runner_scope") != "WINDOWS_HOST_ONLY_NOT_PHYSICAL_GUI":
+        errors.append("SDK_CAPABILITY_RUNNER_SCOPE_MISMATCH")
+    if (build.get("independent_build_verified") is not True
+            or build.get("completed_run_required") is not True
+            or build.get("run_status_at_verification") != "completed"
+            or build.get("run_conclusion") != "success"):
+        errors.append("SDK_CAPABILITY_BUILD_ATTESTATION_NOT_VERIFIED")
+    if type(probe.get("build_run_id")) is not int or probe.get("build_run_id") != build.get("run_id"):
+        errors.append("SDK_CAPABILITY_BUILD_RUN_ID_MISMATCH")
+    if probe.get("workflow_head_sha") != build.get("workflow_head_sha"):
+        errors.append("SDK_CAPABILITY_WORKFLOW_HEAD_MISMATCH")
+
+    forbidden_true = (
+        "makepkg_executed", "submission_validator_executed",
+        "sdk_validation_executed", "package_built", "msixvc2_built",
+        "signing_performed", "store_submitted", "physical_gui_verified",
+        "gdk_package_verified", "ordinary_msix_allowed",
+    )
+    for key in forbidden_true:
+        if probe.get(key) is not False:
+            errors.append("SDK_CAPABILITY_FORBIDDEN_FLAG_" + key.upper())
+
+    status = probe.get("status")
+    if not isinstance(status, str) or not (
+        status == "PASS_TOOLCHAIN_CAPABILITY_ONLY" or status.startswith("HOLD_")
+    ):
+        errors.append("SDK_CAPABILITY_STATUS_INVALID")
+
+    if status == "PASS_TOOLCHAIN_CAPABILITY_ONLY":
+        expected_version = probe.get("expected_sdk_version")
+        if not isinstance(expected_version, str) or not VERSION_RE.fullmatch(expected_version):
+            errors.append("SDK_CAPABILITY_APPROVED_VERSION_INVALID")
+        for name in ("makepkg", "submission_validator"):
+            component = probe.get(name)
+            if not isinstance(component, dict):
+                errors.append("SDK_CAPABILITY_COMPONENT_MISSING_" + name.upper())
+                continue
+            if type(component.get("size_bytes")) is not int or component["size_bytes"] <= 0:
+                errors.append("SDK_CAPABILITY_COMPONENT_SIZE_INVALID_" + name.upper())
+            digest = component.get("sha256")
+            if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+                errors.append("SDK_CAPABILITY_COMPONENT_SHA_INVALID_" + name.upper())
+            if component.get("signature_status") != "Valid":
+                errors.append("SDK_CAPABILITY_COMPONENT_SIGNATURE_INVALID_" + name.upper())
+            subject = component.get("signer_subject")
+            if not isinstance(subject, str) or MICROSOFT_CN_RE.search(subject) is None:
+                errors.append("SDK_CAPABILITY_COMPONENT_NOT_MICROSOFT_SIGNED_" + name.upper())
+        makepkg = probe.get("makepkg")
+        if isinstance(makepkg, dict) and makepkg.get("effective_version") != expected_version:
+            errors.append("SDK_CAPABILITY_MAKEPKG_VERSION_MISMATCH")
+
+    if errors:
+        return {
+            "status": "HOLD_GDK_SDK_CAPABILITY_PROOF_MISMATCH",
+            "source_status": status,
+            "receipt_verified": False,
+            "toolchain_capability_verified": False,
+            "errors": sorted(set(errors)),
+        }
+
+    return {
+        "status": status,
+        "source_status": status,
+        "receipt_verified": True,
+        "toolchain_capability_verified": status == "PASS_TOOLCHAIN_CAPABILITY_ONLY",
+        "host_os": probe.get("host_os"),
+        "runner_scope": probe.get("runner_scope"),
+        "workflow_head_sha": probe.get("workflow_head_sha"),
+        "build_run_id": probe.get("build_run_id"),
+        "sdk_root": probe.get("sdk_root"),
+        "sdk_root_source": probe.get("sdk_root_source"),
+        "expected_sdk_version": probe.get("expected_sdk_version"),
+        "makepkg": probe.get("makepkg"),
+        "submission_validator": probe.get("submission_validator"),
+        "read_only": True,
+        "makepkg_executed": False,
+        "submission_validator_executed": False,
+        "sdk_validation_executed": False,
+        "package_built": False,
+        "msixvc2_built": False,
+        "signing_performed": False,
+        "store_submitted": False,
+        "physical_gui_verified": False,
+        "gdk_package_verified": False,
+        "ordinary_msix_allowed": False,
+        "errors": [],
+    }
+
+
 def _default_preflight(contract_verified: bool):
     reasons = {
         "identity": "APPROVED_IDENTITY_FILE_NOT_SUPPLIED_CAS_UNVERIFIED",
@@ -341,7 +457,7 @@ def _hold_gates(preflight):
 
 
 def compose_receipt(*, contract, identity_fields, preflight, build, ancestry, refs,
-                    workflow_head_sha, build_run_id):
+                    workflow_head_sha, build_run_id, sdk_capability=None):
     holds = []
     if not contract:
         holds.append("PROVISIONER_PR53_CONTRACT_NOT_VERIFIED")
@@ -372,6 +488,24 @@ def compose_receipt(*, contract, identity_fields, preflight, build, ancestry, re
         holds.append("GDK_POST_CAS_BUILD_BRANCH_NOT_FOUND")
 
     gate_summary = _hold_gates(preflight)
+    if sdk_capability is None:
+        sdk_capability = {
+            "status": "HOLD_GDK_SDK_CAPABILITY_ARTIFACT_UNAVAILABLE",
+            "receipt_verified": False,
+            "toolchain_capability_verified": False,
+            "errors": ["SDK_CAPABILITY_ARTIFACT_NOT_SUPPLIED"],
+        }
+    if (sdk_capability.get("receipt_verified") is True
+            and sdk_capability.get("toolchain_capability_verified") is True):
+        gate_summary["sdk_toolchain"] = {
+            "status": "CHECK_ONLY",
+            "reason": "READ_ONLY_GDK_TOOLCHAIN_CAPABILITY_CONFIRMED",
+        }
+    else:
+        gate_summary["sdk_toolchain"] = {
+            "status": "HOLD",
+            "reason": sdk_capability.get("status") or "SDK_CAPABILITY_STATUS_MISSING",
+        }
     for name, gate in gate_summary.items():
         if gate["status"] == "HOLD":
             holds.append(name.upper() + ":" + str(gate["reason"]))
@@ -468,9 +602,14 @@ def compose_receipt(*, contract, identity_fields, preflight, build, ancestry, re
             "status": "HOLD_FOUR_APPROVED_GDK_ASSET_BYTES_AND_HASHES_MISSING",
         },
         "sdk_toolchain": {
-            "preflight_host": platform.system(),
+            "preflight_host": sdk_capability.get("host_os") or platform.system(),
+            "capability_probe": sdk_capability,
             "makepkg_bytes_independently_verified": False,
-            "status": "HOLD_WINDOWS_GDK_SDK_AND_TRUSTED_MAKEPKG_NOT_VERIFIED",
+            "status": (
+                "CHECK_ONLY_CAPABILITY_CONFIRMED"
+                if sdk_capability.get("toolchain_capability_verified") is True
+                else (sdk_capability.get("status") or "HOLD_GDK_SDK_CAPABILITY_ARTIFACT_UNAVAILABLE")
+            ),
         },
         "sdk_validation": {"executed": False, "status": "HOLD_GDK_SDK_VALIDATION_NOT_EXECUTED"},
         "signing": {"verified": False, "status": "HOLD_GDK_SIGNING_NOT_VERIFIED"},
@@ -514,6 +653,7 @@ def main(argv=None):
         dest="completed_build_attestation", type=Path, required=True,
         help="Independent attestation proving the exact build run completed successfully.",
     )
+    parser.add_argument("--sdk-capability-receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -537,6 +677,7 @@ def main(argv=None):
     }
     refs = _remote_refs()
     build = _validate_build_proof(args.completed_build_attestation, dict(os.environ))
+    sdk_capability = _validate_sdk_capability(args.sdk_capability_receipt, build)
     report = compose_receipt(
         contract=contract,
         identity_fields=identity_fields,
@@ -546,6 +687,7 @@ def main(argv=None):
         refs=refs,
         workflow_head_sha=os.environ.get("WORKFLOW_HEAD_SHA", ""),
         build_run_id=os.environ.get("BUILD_RUN_ID", ""),
+        sdk_capability=sdk_capability,
     )
     if contract_error:
         report["provisioner_contract_error"] = contract_error
