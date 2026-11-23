@@ -139,8 +139,14 @@ def verify(receipt, exe_path, token, fetch=get):
     require(artifact.get("name") == BUILD_ARTIFACT_PREFIX + SOURCE, "BUILD_ARTIFACT_NAME_MISMATCH")
     require(artifact.get("workflow_run", {}).get("id") == run_id, "ARTIFACT_RUN_MISMATCH")
     require(artifact.get("workflow_run", {}).get("head_sha") == workflow_head_sha, "ARTIFACT_WORKFLOW_HEAD_MISMATCH")
+    artifact_digest_header = artifact.get("digest")
+    require(isinstance(artifact_digest_header, str)
+            and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", artifact_digest_header)),
+            "ARTIFACT_DIGEST_INVALID")
     archive = fetch(f"{API}/actions/artifacts/{artifact_id}/zip", token)
     require(isinstance(archive, (bytes, bytearray)) and len(archive) <= MAX_ARTIFACT_ZIP_BYTES, "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID")
+    archive_sha256 = hashlib.sha256(archive).hexdigest()
+    require(artifact_digest_header == "sha256:" + archive_sha256, "ARTIFACT_ARCHIVE_DIGEST_MISMATCH")
     with zipfile.ZipFile(io.BytesIO(archive)) as z:
         infos = z.infolist()
         names = [info.filename for info in infos]
@@ -160,6 +166,7 @@ def verify(receipt, exe_path, token, fetch=get):
         with z.open(info) as stream:
             artifact_digest, artifact_size = hash_stream(stream, MAX_EXE_BYTES, "ARTIFACT_EXE_TOO_LARGE")
         require(artifact_size == info.file_size, "ARTIFACT_EXE_SIZE_MISMATCH")
+        require(local_size == artifact_size, "LOCAL_EXE_SIZE_MISMATCH")
         provenance_info = z.getinfo(provenance_member)
         provenance_mode = (provenance_info.external_attr >> 16) & 0o170000
         require(not provenance_info.is_dir() and provenance_mode in (0, stat.S_IFREG),
@@ -181,6 +188,8 @@ def verify(receipt, exe_path, token, fetch=get):
             "run_id": run_id, "artifact_id": artifact_id,
             "build_job_name": BUILD_JOB_NAME, "run_status_at_verification": run.get("status"),
             "artifact_exe_path": member, "artifact_provenance_path": provenance_member,
+            "artifact_zip_sha256": archive_sha256, "artifact_zip_size_bytes": len(archive),
+            "exe_size_bytes": local_size,
             "workflow_head_sha": workflow_head_sha, "exe_sha256": digest,
             "build_provenance_verified": True, "independent_build_verified": True,
             "physical_gui_verified": False, "artifact_kind": "EXE_QA_UNSIGNED",
