@@ -27,6 +27,34 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           mkdir -p evidence
+          # Preserve a terminal, fail-closed receipt even when verification exits early.
+          on_verification_error() {
+            local exit_code="$1" failed_line="$2"
+            export PROOF_EXIT_CODE="$exit_code" PROOF_FAILED_LINE="$failed_line"
+            python3 - <<'PYERR'
+          import json, os
+          from pathlib import Path
+          p = Path('evidence/cloud-build-proof.json')
+          previous = {}
+          if p.exists():
+              try:
+                  previous = json.loads(p.read_text())
+              except (ValueError, OSError):
+                  pass
+          previous.update({
+              'schema': 'signal-sprint-cloud-build-proof-v1',
+              'status': 'HOLD_INDEPENDENT_VERIFICATION_FAILED',
+              'failure_exit_code': int(os.environ['PROOF_EXIT_CODE']),
+              'failure_workflow_line': int(os.environ['PROOF_FAILED_LINE']),
+              'product_source': '1a349faa41663c417c40710140a4d50c79b62b78',
+              'independent_build_verified': False,
+              'physical_gui_verified': False,
+              'product_acceptance': False,
+          })
+          p.write_text(json.dumps(previous, indent=2) + '\n')
+          PYERR
+          }
+          trap 'on_verification_error "$?" "$LINENO"' ERR
           python3 - <<'PY'
           import json, os
           from pathlib import Path
