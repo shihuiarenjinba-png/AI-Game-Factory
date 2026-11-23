@@ -41,7 +41,9 @@ def get(url, token, accept="application/vnd.github+json"):
         "User-Agent": "signal-sprint-build-provenance",
     })
     with urllib.request.urlopen(req, timeout=35) as response:
-        limit = MAX_ARTIFACT_ZIP_BYTES if accept == "application/octet-stream" else MAX_API_JSON_BYTES
+        # GitHub's artifact ZIP endpoint redirects under the JSON media type.
+        # Apply the larger byte cap by endpoint path, not by the Accept header.
+        limit = MAX_ARTIFACT_ZIP_BYTES if url.endswith("/zip") else MAX_API_JSON_BYTES
         content_length = response.headers.get("Content-Length")
         if content_length is not None:
             require(int(content_length) <= limit, "API_RESPONSE_TOO_LARGE")
@@ -118,7 +120,7 @@ def verify(receipt, exe_path, token, fetch=get):
     require(artifact.get("name") == BUILD_ARTIFACT_PREFIX + SOURCE, "BUILD_ARTIFACT_NAME_MISMATCH")
     require(artifact.get("workflow_run", {}).get("id") == run_id, "ARTIFACT_RUN_MISMATCH")
     require(artifact.get("workflow_run", {}).get("head_sha") == workflow_head_sha, "ARTIFACT_WORKFLOW_HEAD_MISMATCH")
-    archive = fetch(f"{API}/actions/artifacts/{artifact_id}/zip", token, "application/octet-stream")
+    archive = fetch(f"{API}/actions/artifacts/{artifact_id}/zip", token)
     require(isinstance(archive, (bytes, bytearray)) and len(archive) <= MAX_ARTIFACT_ZIP_BYTES, "ARTIFACT_ZIP_TOO_LARGE_OR_INVALID")
     with zipfile.ZipFile(io.BytesIO(archive)) as z:
         infos = z.infolist()
