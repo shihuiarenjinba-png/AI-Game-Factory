@@ -10,6 +10,8 @@ on:
       - 'qa/signal_sprint_uia_dynamic_gate.ps1'
       - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
       - 'products/signal-sprint/tests/test_gdk_sdk_capability_probe.py'
+      - 'qa/signal_sprint_gdk_package_readiness.py'
+      - 'products/signal-sprint/tests/test_gdk_package_readiness.py'
       - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
       - '.github/workflows/signal-sprint-cloud-build-proof.yml'
   workflow_dispatch:
@@ -133,6 +135,10 @@ jobs:
     needs: [cloud-provenance-fixture]
     outputs:
       attestation_status: ${{ steps.publish.outputs.attestation_status }}
+      build_run_id: ${{ steps.publish.outputs.build_run_id }}
+      build_artifact_id: ${{ steps.publish.outputs.build_artifact_id }}
+      build_exe_sha256: ${{ steps.publish.outputs.build_exe_sha256 }}
+      build_workflow_head_sha: ${{ steps.publish.outputs.build_workflow_head_sha }}
     if: >-
       (github.event_name == 'push' ||
        (github.event_name == 'workflow_dispatch' && inputs.expected_head == github.sha)) &&
@@ -388,7 +394,7 @@ jobs:
             --require-completed-run \
             --expected-run-id "$EXPECTED_BUILD_RUN_ID" \
             --expected-workflow-head "$EXPECTED_HEAD"
-      - name: Publish completed build attestation status
+      - name: Publish completed build attestation status and exact build bindings
         id: publish
         if: always()
         shell: bash
@@ -397,9 +403,12 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
           path = Path("evidence/completed-build-attestation.json")
+          receipt = {}
+          outputs = {}
           if path.is_file():
               try:
                   receipt = json.loads(path.read_text(encoding="utf-8"))
@@ -408,8 +417,36 @@ jobs:
                   status = "FAIL_ATTESTATION_RECEIPT_INVALID"
           else:
               status = "HOLD_ATTESTATION_RECEIPT_MISSING"
+
+          if status == "PASS_INDEPENDENT_BUILD_ONLY":
+              valid = (
+                  receipt.get("completed_run_required") is True
+                  and receipt.get("run_status_at_verification") == "completed"
+                  and receipt.get("run_conclusion") == "success"
+                  and receipt.get("independent_build_verified") is True
+                  and receipt.get("build_provenance_verified") is True
+                  and receipt.get("workflow_head_sha") == os.environ.get("GITHUB_SHA")
+                  and receipt.get("product_source") == "1a349faa41663c417c40710140a4d50c79b62b78"
+                  and receipt.get("pr30_source_commit") == "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
+                  and type(receipt.get("run_id")) is int and receipt["run_id"] > 0
+                  and type(receipt.get("artifact_id")) is int and receipt["artifact_id"] > 0
+                  and isinstance(receipt.get("exe_sha256"), str)
+                  and bool(re.fullmatch(r"[0-9a-f]{64}", receipt["exe_sha256"]))
+              )
+              if not valid:
+                  status = "HOLD_COMPLETED_BUILD_ATTESTATION_FIELDS_INVALID"
+              else:
+                  outputs = {
+                      "build_run_id": str(receipt["run_id"]),
+                      "build_artifact_id": str(receipt["artifact_id"]),
+                      "build_exe_sha256": receipt["exe_sha256"],
+                      "build_workflow_head_sha": receipt["workflow_head_sha"],
+                  }
+
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("attestation_status=" + status + "\n")
+              for key, value in outputs.items():
+                  output.write(key + "=" + value + "\n")
           print(status)
           PY
       - name: Upload completed build attestation and source receipts
@@ -426,6 +463,67 @@ jobs:
         run: |
           echo 'COMPLETED_BUILD_ATTESTATION_FAILED'
           exit 1
+
+  gdk-package-readiness:
+    if: always()
+    needs: [cloud-provenance-fixture, completed-build-attestation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      INDEPENDENT_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      PRODUCT_SOURCE_SHA: 1a349faa41663c417c40710140a4d50c79b62b78
+      PR30_SOURCE_SHA: a377043d3c9ab0c71d9a100cdb841dd7000313b9
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact UIA workflow head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact Provisioner PR53 contract as data only
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: provisioner
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download completed-build attestation from this exact UIA run
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/attestation
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run GDK package-readiness contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
+      - name: Generate GDK readiness only from completed-build attestation
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
+            --provisioner-checkout provisioner \
+            --factory-checkout factory \
+            --completed-build-attestation evidence/attestation/completed-build-attestation.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload completed-run GDK package-readiness receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
+          if-no-files-found: error
+          retention-days: 30
 
   bilingual-uia:
     needs: [cloud-provenance-fixture, cloud-revision-hold, completed-build-attestation]

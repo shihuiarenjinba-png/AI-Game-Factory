@@ -230,12 +230,11 @@ def _validate_build_proof(proof_path: Path, env: dict):
         errors.append("BUILD_PROOF_MUST_NOT_CLAIM_PHYSICAL_GUI")
     if proof.get("gdk_package_verified") is not False:
         errors.append("BUILD_PROOF_MUST_NOT_CLAIM_GDK_PACKAGE")
-    if proof.get("completed_run_required") is not False:
-        errors.append("SELF_CHECK_COMPLETION_MODE_UNEXPECTED")
-    if proof.get("run_status_at_verification") not in ("in_progress", "completed"):
-        errors.append("BUILD_RUN_STATUS_INVALID")
-    if proof.get("run_status_at_verification") == "completed" and proof.get("run_conclusion") != "success":
-        errors.append("BUILD_RUN_COMPLETION_NOT_SUCCESS")
+    if proof.get("completed_run_required") is not True:
+        errors.append("COMPLETED_BUILD_ATTESTATION_REQUIRED")
+    if (proof.get("run_status_at_verification") != "completed"
+            or proof.get("run_conclusion") != "success"):
+        errors.append("BUILD_RUN_NOT_COMPLETED_SUCCESS")
 
     run_id = proof.get("run_id")
     artifact_id = proof.get("artifact_id")
@@ -289,6 +288,8 @@ def _validate_build_proof(proof_path: Path, env: dict):
         "run_url": f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{run_id}",
         "artifact_url": f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{run_id}/artifacts/{artifact_id}",
         "run_status_at_verification": proof.get("run_status_at_verification"),
+        "run_conclusion": proof.get("run_conclusion"),
+        "completed_run_required": proof.get("completed_run_required"),
         "workflow_head_sha": proof["workflow_head_sha"],
         "product_source_sha": proof["product_source"],
         "pr30_source_sha": proof["pr30_source_commit"],
@@ -346,6 +347,10 @@ def compose_receipt(*, contract, identity_fields, preflight, build, ancestry, re
         holds.append("PROVISIONER_PR53_CONTRACT_NOT_VERIFIED")
     if not build.get("independent_build_verified"):
         holds.extend(build.get("errors", []) or ["CURRENT_QA_BUILD_NOT_INDEPENDENTLY_VERIFIED"])
+    if (build.get("completed_run_required") is not True
+            or build.get("run_status_at_verification") != "completed"
+            or build.get("run_conclusion") != "success"):
+        holds.append("COMPLETED_BUILD_ATTESTATION_NOT_VERIFIED")
     if contract:
         if contract.get("source_sha") != QA_SOURCE_SHA:
             holds.append("GDK_IDENTITY_REQUEST_IS_BOUND_TO_OLDER_SOURCE")
@@ -411,6 +416,19 @@ def compose_receipt(*, contract, identity_fields, preflight, build, ancestry, re
                       if ancestry.get("required_revision_is_ancestor_of_qa_source") is not True
                       else "CHECK_ONLY_SOURCE_ALIGNMENT")
             ),
+        },
+        "completed_build_attestation": {
+            "required": True,
+            "verified": (
+                build.get("independent_build_verified") is True
+                and build.get("completed_run_required") is True
+                and build.get("run_status_at_verification") == "completed"
+                and build.get("run_conclusion") == "success"
+            ),
+            "run_id": build.get("run_id"),
+            "run_status": build.get("run_status_at_verification"),
+            "run_conclusion": build.get("run_conclusion"),
+            "workflow_head_sha": build.get("workflow_head_sha"),
         },
         "current_qa_build": build,
         "pinned_original_gdk_artifact": {
@@ -482,6 +500,7 @@ def compose_receipt(*, contract, identity_fields, preflight, build, ancestry, re
             "CURRENT_QA_UNSIGNED_EXE_IS_NOT_THE_PINNED_ORIGINAL_GDK_EXE",
             "CHECK_ONLY_RECEIPT_NEVER_AUTHORIZES_GDK_PACKAGE_OR_STORE",
             "PHYSICAL_GUI_EVIDENCE_REMAINS_A_SEPARATE_GATE",
+            "GDK_READINESS_REQUIRES_COMPLETED_BUILD_ATTESTATION",
         ],
     }
 
@@ -490,7 +509,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provisioner-checkout", type=Path, required=True)
     parser.add_argument("--factory-checkout", type=Path, required=True)
-    parser.add_argument("--build-proof", type=Path, required=True)
+    parser.add_argument(
+        "--completed-build-attestation", "--build-proof",
+        dest="completed_build_attestation", type=Path, required=True,
+        help="Independent attestation proving the exact build run completed successfully.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -513,7 +536,7 @@ def main(argv=None):
             args.factory_checkout, REQUIRED_WIN_LOSE_SHA, QA_SOURCE_SHA),
     }
     refs = _remote_refs()
-    build = _validate_build_proof(args.build_proof, dict(os.environ))
+    build = _validate_build_proof(args.completed_build_attestation, dict(os.environ))
     report = compose_receipt(
         contract=contract,
         identity_fields=identity_fields,
