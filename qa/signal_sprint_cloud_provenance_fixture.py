@@ -255,7 +255,7 @@ def run_checks(results):
         assert all(required in candidate for required in cloud_failure_guards), "CLOUD_BUILD_GUARD_MISSING"
     for token in cloud_failure_guards:
         assert token in cloud_build_workflow, "CLOUD_BUILD_GUARD_MISSING:" + token
-        changed = cloud_build_workflow.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
+        changed = cloud_build_workflow.replace(token, "REMOVED_BY_MUTATION_TEST")
         assert changed != cloud_build_workflow, "CLOUD_BUILD_MUTATION_NO_EFFECT:" + token
         results.append(negative("cloud build workflow mutation reject " + token,
                                 lambda candidate=changed: assert_cloud_build_contract(candidate)))
