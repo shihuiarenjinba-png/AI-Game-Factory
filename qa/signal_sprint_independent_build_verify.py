@@ -10,6 +10,7 @@ import stat
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 import zipfile
 
 REPO = "shihuiarenjinba-png/AI-Game-Factory"
@@ -28,6 +29,19 @@ MAX_ARTIFACT_UNCOMPRESSED_BYTES = 600 * 1024 * 1024
 MAX_EXE_BYTES = 512 * 1024 * 1024
 
 
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never forward the GitHub bearer token to a cross-origin artifact blob host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            old_host = urlsplit(req.full_url).netloc.casefold()
+            new_host = urlsplit(newurl).netloc.casefold()
+            if old_host != new_host:
+                for name in ("Authorization", "X-GitHub-Api-Version", "Accept"):
+                    redirected.remove_header(name)
+        return redirected
+
+
 def require(condition, reason):
     if not condition:
         raise ValueError(reason)
@@ -40,16 +54,21 @@ def get(url, token, accept="application/vnd.github+json"):
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "signal-sprint-build-provenance",
     })
-    with urllib.request.urlopen(req, timeout=35) as response:
-        # GitHub's artifact ZIP endpoint redirects under the JSON media type.
-        # Apply the larger byte cap by endpoint path, not by the Accept header.
-        limit = MAX_ARTIFACT_ZIP_BYTES if url.endswith("/zip") else MAX_API_JSON_BYTES
-        content_length = response.headers.get("Content-Length")
-        if content_length is not None:
-            require(int(content_length) <= limit, "API_RESPONSE_TOO_LARGE")
-        data = response.read(limit + 1)
-        require(len(data) <= limit, "API_RESPONSE_TOO_LARGE")
-        return data
+    opener = urllib.request.build_opener(SafeRedirectHandler())
+    try:
+        with opener.open(req, timeout=35) as response:
+            # GitHub's artifact ZIP endpoint redirects under the JSON media type.
+            # Apply the larger byte cap by endpoint path, not by the Accept header.
+            limit = MAX_ARTIFACT_ZIP_BYTES if url.endswith("/zip") else MAX_API_JSON_BYTES
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                require(int(content_length) <= limit, "API_RESPONSE_TOO_LARGE")
+            data = response.read(limit + 1)
+            require(len(data) <= limit, "API_RESPONSE_TOO_LARGE")
+            return data
+    except urllib.error.HTTPError as exc:
+        target = urlsplit(exc.url or url)
+        raise RuntimeError(f"HTTP_ERROR_{exc.code}:{target.netloc}{target.path}") from exc
 
 
 def hash_stream(stream, limit, reason):
