@@ -415,6 +415,7 @@ jobs:
         with:
           artifact-ids: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
           path: evidence/build-proof
+          merge-multiple: true
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.discover.outputs.build_run_id }}

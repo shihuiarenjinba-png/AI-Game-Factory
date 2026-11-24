@@ -956,6 +956,8 @@ def run_checks(results):
         for label, token in completed_job_contract.items():
             assert token in candidate, "COMPLETED_BUILD_ATTESTATION_CONTRACT_MISSING:" + label
         assert "name: signal-sprint-independent-cloud-build-proof" not in candidate, "BUILD_PROOF_ARTIFACT_MUST_DOWNLOAD_BY_EXACT_ID"
+        proof_download = candidate.split("id: download_proof", 1)[1].split("      - name:", 1)[0]
+        assert "merge-multiple: true" in proof_download, "BUILD_PROOF_ARTIFACT_MUST_FLATTEN_TO_RECEIPT_PATH"
         assert "self-hosted" not in candidate and "signal-sprint-gdk" not in candidate, "CLOUD_ATTESTATION_MUST_NOT_ALLOCATE_PHYSICAL_GDK_RUNNER"
     for label, token in completed_job_contract.items():
         changed = completed_job.replace(token, "REMOVED_BY_MUTATION_TEST")
@@ -968,6 +970,10 @@ def run_checks(results):
     results.append(negative(
         "completed build attestation rejects name-only proof artifact download",
         lambda: assert_completed_job_contract(completed_job + "\n          name: signal-sprint-independent-cloud-build-proof")))
+    proof_download_without_flatten = completed_job.replace("          merge-multiple: true\n", "", 1)
+    results.append(negative(
+        "completed build attestation rejects proof artifact extraction into a nested directory",
+        lambda: assert_completed_job_contract(proof_download_without_flatten)))
     results.append(negative(
         "physical UIA strict completion flag mutation reject",
         lambda: assert_uia_completed_build_contract(uia_verify_command.replace("--require-completed-run", ""))))
@@ -1233,7 +1239,7 @@ def main():
             "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
             "build_run_discovery_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_completed_build_discovery.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v6",
+            "schema": "signal-sprint-cloud-fixture-v7",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
