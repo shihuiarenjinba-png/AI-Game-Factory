@@ -1461,7 +1461,7 @@ def run_checks(results):
         "independent build false-claim guard": "CLOUD_FIXTURE_JSON_FALSE_BUILD_CLAIM",
         "product acceptance false-claim guard": "CLOUD_FIXTURE_JSON_PRODUCT_ACCEPTANCE_TRUE",
         "bounded Artifact download": "MAX_ARTIFACT_BYTES = 8 * 1024 * 1024",
-        "eventual Artifact-list visibility retry": "time.sleep(1)",
+        "eventual Artifact-list visibility retry": "sleep_fn(1)",
         "bounded Artifact-list completeness": "CLOUD_FIXTURE_ARTIFACT_COLLECTION_INCOMPLETE",
         "newly finalized Artifact visibility retry": "CLOUD_FIXTURE_ARTIFACT_NOT_VISIBLE",
         "duplicate exact-name Artifact rejection": "CLOUD_FIXTURE_ARTIFACT_DUPLICATE",
