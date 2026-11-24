@@ -412,7 +412,7 @@ def self_test():
         rejected("expired", "CLOUD_FIXTURE_ARTIFACT_EXPIRED",
                  lambda: (state["metadata"].update({"expired": True}),
                           state["artifacts"][0].update({"expired": True})))
-        rejected("duplicate", "CLOUD_FIXTURE_ARTIFACT_DUPLICATE_OR_MISSING",
+        rejected("duplicate", "CLOUD_FIXTURE_ARTIFACT_DUPLICATE",
                  lambda: state["artifacts"].append(copy.deepcopy(state["metadata"])))
         rejected("corrupt ZIP", "CLOUD_FIXTURE_ARTIFACT_ZIP_INVALID",
                  lambda: (state.update({"archive": b"not-a-zip"}),
