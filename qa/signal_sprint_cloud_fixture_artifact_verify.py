@@ -492,7 +492,7 @@ def self_test():
                  "CLOUD_FIXTURE_SOURCE_HASH_MISMATCH:artifact_verifier_source_sha256",
                  lambda: repack({**fixture, "artifact_verifier_source_sha256": "0" * 64}))
         rejected("missing artifact verifier source hash",
-                 "CLOUD_FIXTURE_SOURCE_HASH_INVALID:artifact_verifier_source_sha256",
+                 "CLOUD_FIXTURE_JSON_SOURCE_HASH_INVALID:artifact_verifier_source_sha256",
                  lambda: repack({key: value for key, value in fixture.items()
                                  if key != "artifact_verifier_source_sha256"}))
         rejected("unsafe ZIP member", "CLOUD_FIXTURE_ARTIFACT_MEMBER_MISMATCH",
