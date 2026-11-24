@@ -114,6 +114,25 @@ def get_limited(url, token):
         ) from exc
 
 
+def fetch_artifact_zip(url, token, fetch, sleep_fn=time.sleep):
+    """Retry only transient GitHub artifact-download visibility/rate-limit failures."""
+    parsed = urlsplit(url)
+    expected_target = f":{parsed.netloc}{parsed.path}"
+    retryable_codes = {"404", "429", "500", "502", "503", "504"}
+    for attempt in range(6):
+        try:
+            return fetch(url, token)
+        except RuntimeError as exc:
+            message = str(exc)
+            retryable = any(
+                f"CLOUD_FIXTURE_ARTIFACT_HTTP_ERROR_{code}{expected_target}" in message
+                for code in retryable_codes
+            )
+            if not retryable or attempt == 5:
+                raise
+            sleep_fn(attempt + 1)
+
+
 def source_hashes(source_root):
     root = Path(source_root)
     result = {}
@@ -184,7 +203,7 @@ def validate_fixture(fixture, run_id, repository_id, workflow_head, source_root)
 
 
 def verify(expected_run_id, expected_repository_id, expected_workflow_head,
-           token, source_root=".", fetch=get_limited):
+           token, source_root=".", fetch=get_limited, sleep_fn=time.sleep):
     require(isinstance(expected_run_id, str) and re.fullmatch(r"[1-9][0-9]*", expected_run_id),
             "CLOUD_FIXTURE_EXPECTED_RUN_ID_INVALID")
     run_id = int(expected_run_id)
@@ -248,7 +267,9 @@ def verify(expected_run_id, expected_repository_id, expected_workflow_head,
     require(run.get("head_repository_id") == repository_id,
             "CLOUD_FIXTURE_ARTIFACT_HEAD_REPOSITORY_MISMATCH")
 
-    archive = fetch(f"{API}/actions/artifacts/{artifact_id}/zip", token)
+    archive = fetch_artifact_zip(
+        f"{API}/actions/artifacts/{artifact_id}/zip", token, fetch, sleep_fn=sleep_fn
+    )
     require(isinstance(archive, (bytes, bytearray)) and 0 < len(archive) <= MAX_ARTIFACT_BYTES,
             "CLOUD_FIXTURE_ARTIFACT_DOWNLOAD_SIZE_INVALID")
     require(len(archive) == size, "CLOUD_FIXTURE_ARTIFACT_ZIP_SIZE_MISMATCH")
@@ -356,7 +377,8 @@ def self_test():
             state.clear()
             state.update({"metadata": metadata, "artifacts": [copy.deepcopy(metadata)],
                           "archive": archive, "list_reads": 0, "simulate_listing_race": False,
-                          "simulate_fixture_visibility": False})
+                          "simulate_fixture_visibility": False, "zip_reads": 0,
+                          "simulate_zip_visibility": 0})
 
         list_url = f"{API}/actions/runs/{run_id}/artifacts?per_page=100"
 
@@ -374,6 +396,13 @@ def self_test():
             if url == f"{API}/actions/artifacts/98765":
                 return json.dumps(state["metadata"]).encode()
             if url == f"{API}/actions/artifacts/98765/zip":
+                state["zip_reads"] += 1
+                if state["zip_reads"] <= state["simulate_zip_visibility"]:
+                    parsed = urlsplit(url)
+                    raise RuntimeError(
+                        "CLOUD_FIXTURE_ARTIFACT_HTTP_ERROR_404:"
+                        + parsed.netloc + parsed.path
+                    )
                 return state["archive"]
             raise ValueError("SELF_TEST_UNEXPECTED_URL:" + url)
 
@@ -385,7 +414,8 @@ def self_test():
             state["artifacts"][0]["digest"] = state["metadata"]["digest"]
 
         def accepted():
-            result = verify(run_id, repo_id, head, token, source_root=root, fetch=fake_fetch)
+            result = verify(run_id, repo_id, head, token, source_root=root,
+                            fetch=fake_fetch, sleep_fn=lambda _seconds: None)
             require(result["status"] == "PASS_CLOUD_FIXTURE_ARTIFACT_VERIFIED",
                     "SELF_TEST_POSITIVE_NOT_VERIFIED")
 
@@ -394,7 +424,8 @@ def self_test():
             reset()
             mutation()
             try:
-                verify(run_id, repo_id, head, token, source_root=root, fetch=fake_fetch)
+                verify(run_id, repo_id, head, token, source_root=root,
+                       fetch=fake_fetch, sleep_fn=lambda _seconds: None)
             except (ValueError, RuntimeError, zipfile.BadZipFile) as exc:
                 require(expected in str(exc), "SELF_TEST_WRONG_REJECTION:" + label + ":" + str(exc))
             else:
@@ -412,6 +443,12 @@ def self_test():
         state["simulate_fixture_visibility"] = True
         accepted()
         tests += 1
+        reset()
+        state["simulate_zip_visibility"] = 2
+        accepted()
+        tests += 1
+        rejected("artifact ZIP persistent 404", "CLOUD_FIXTURE_ARTIFACT_HTTP_ERROR_404",
+                 lambda: state.update({"simulate_zip_visibility": 6}))
         rejected("digest", "CLOUD_FIXTURE_ARTIFACT_ZIP_DIGEST_MISMATCH",
                  lambda: (state["metadata"].update({"digest": "sha256:" + "0" * 64}),
                           state["artifacts"][0].update({"digest": "sha256:" + "0" * 64})))
