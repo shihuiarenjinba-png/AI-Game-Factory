@@ -8,6 +8,7 @@ on:
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
       - 'qa/signal_sprint_completed_build_discovery.py'
       - 'qa/signal_sprint_independent_build_verify.py'
+      - 'qa/signal_sprint_proof_artifact_verify.py'
       - 'qa/signal_sprint_uia_dynamic_gate.ps1'
       - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
       - 'products/signal-sprint/tests/test_gdk_sdk_capability_probe.py'
@@ -142,6 +143,8 @@ jobs:
       build_workflow_head_sha: ${{ steps.publish.outputs.build_workflow_head_sha }}
       build_proof_artifact_id: ${{ steps.publish.outputs.build_proof_artifact_id }}
       build_proof_artifact_digest: ${{ steps.publish.outputs.build_proof_artifact_digest }}
+      build_proof_artifact_zip_sha256: ${{ steps.publish.outputs.build_proof_artifact_zip_sha256 }}
+      build_proof_artifact_zip_size_bytes: ${{ steps.publish.outputs.build_proof_artifact_zip_size_bytes }}
     if: >-
       (github.event_name == 'push' ||
        (github.event_name == 'workflow_dispatch' && inputs.expected_head == github.sha)) &&
@@ -408,22 +411,31 @@ jobs:
               )
               emit(status, reason=last_error or "ARTIFACT_DISCOVERY_TIMEOUT")
           PY
-      - name: Download independent build receipt by exact Artifact ID from the exact run
-        id: download_proof
+      - name: Independently verify exact proof Artifact ZIP bytes and embedded receipts
+        id: verify_proof_artifact
         if: steps.discover_proof_artifact.outputs.proof_artifact_id != ''
         continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
-          path: evidence/build-proof
-          merge-multiple: true
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.discover.outputs.build_run_id }}
-
+        shell: bash
+        env:
+          GITHUB_TOKEN: \${{ github.token }}
+          PROOF_ARTIFACT_ID: \${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
+          PROOF_ARTIFACT_DIGEST: \${{ steps.discover_proof_artifact.outputs.proof_artifact_digest }}
+          EXPECTED_BUILD_RUN_ID: \${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_REPOSITORY_ID: \${{ steps.discover.outputs.build_repository_id }}
+          EXPECTED_HEAD: \${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 qa/signal_sprint_proof_artifact_verify.py \
+            --artifact-id "$PROOF_ARTIFACT_ID" \
+            --artifact-digest "$PROOF_ARTIFACT_DIGEST" \
+            --expected-run-id "$EXPECTED_BUILD_RUN_ID" \
+            --expected-repository-id "$EXPECTED_REPOSITORY_ID" \
+            --expected-workflow-head "$EXPECTED_HEAD" \
+            --output evidence/build-proof-artifact-verification.json \
+            --receipt-output evidence/build-proof/build-receipt.json
       - name: Validate receipt run and workflow head; expose exact EXE artifact ID
         id: receipt
-        if: steps.download_proof.outcome == 'success'
+        if: steps.verify_proof_artifact.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
@@ -503,6 +515,9 @@ jobs:
           PROOF_ARTIFACT_DIGEST: ${{ steps.discover_proof_artifact.outputs.proof_artifact_digest }}
           PROOF_ARTIFACT_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
           PROOF_ARTIFACT_WORKFLOW_HEAD_SHA: ${{ github.sha }}
+          PROOF_ARTIFACT_VERIFIED: ${{ steps.verify_proof_artifact.outputs.verified }}
+          PROOF_ARTIFACT_ZIP_SHA256: ${{ steps.verify_proof_artifact.outputs.proof_artifact_zip_sha256 }}
+          PROOF_ARTIFACT_ZIP_SIZE_BYTES: ${{ steps.verify_proof_artifact.outputs.proof_artifact_zip_size_bytes }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -528,11 +543,18 @@ jobs:
               proof_artifact_digest = os.environ.get("PROOF_ARTIFACT_DIGEST", "")
               proof_artifact_run_id = os.environ.get("PROOF_ARTIFACT_RUN_ID", "")
               proof_artifact_head = os.environ.get("PROOF_ARTIFACT_WORKFLOW_HEAD_SHA", "")
+          proof_artifact_verified = os.environ.get("PROOF_ARTIFACT_VERIFIED", "")
+          proof_artifact_zip_sha256 = os.environ.get("PROOF_ARTIFACT_ZIP_SHA256", "")
+          proof_artifact_zip_size_bytes = os.environ.get("PROOF_ARTIFACT_ZIP_SIZE_BYTES", "")
               if (
                   not re.fullmatch(r"[1-9][0-9]*", proof_artifact_id)
                   or not re.fullmatch(r"sha256:[0-9a-f]{64}", proof_artifact_digest)
                   or not re.fullmatch(r"[1-9][0-9]*", proof_artifact_run_id)
                   or not re.fullmatch(r"[a-f0-9]{40}", proof_artifact_head)
+                  or proof_artifact_verified != "true"
+                  or not re.fullmatch(r"[a-f0-9]{64}", proof_artifact_zip_sha256)
+                  or not re.fullmatch(r"[1-9][0-9]*", proof_artifact_zip_size_bytes)
+                  or proof_artifact_zip_sha256 != proof_artifact_digest[7:]
               ):
                   status = "HOLD_BUILD_PROOF_ARTIFACT_BINDING_MISSING"
               else:
@@ -540,6 +562,9 @@ jobs:
                   receipt["build_proof_artifact_digest"] = proof_artifact_digest
                   receipt["build_proof_artifact_run_id"] = int(proof_artifact_run_id)
                   receipt["build_proof_artifact_workflow_head_sha"] = proof_artifact_head
+                  receipt["build_proof_artifact_verified"] = True
+                  receipt["build_proof_artifact_zip_sha256"] = proof_artifact_zip_sha256
+                  receipt["build_proof_artifact_zip_size_bytes"] = int(proof_artifact_zip_size_bytes)
               valid = (
                   status == "PASS_INDEPENDENT_BUILD_ONLY"
                   and receipt.get("completed_run_required") is True
@@ -562,6 +587,10 @@ jobs:
                   and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt.get("build_proof_artifact_digest") or "")))
                   and receipt.get("build_proof_artifact_run_id") == receipt.get("run_id")
                   and receipt.get("build_proof_artifact_workflow_head_sha") == receipt.get("workflow_head_sha")
+                  and receipt.get("build_proof_artifact_verified") is True
+                  and bool(re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("build_proof_artifact_zip_sha256") or "")))
+                  and type(receipt.get("build_proof_artifact_zip_size_bytes")) is int and receipt["build_proof_artifact_zip_size_bytes"] > 0
+                  and receipt.get("build_proof_artifact_zip_sha256") == str(receipt.get("build_proof_artifact_digest"))[7:]
               )
               if not valid:
                   if status == "PASS_INDEPENDENT_BUILD_ONLY":
@@ -575,6 +604,8 @@ jobs:
                       "build_workflow_head_sha": receipt["workflow_head_sha"],
                       "build_proof_artifact_id": str(receipt["build_proof_artifact_id"]),
                       "build_proof_artifact_digest": receipt["build_proof_artifact_digest"],
+                      "build_proof_artifact_zip_sha256": receipt["build_proof_artifact_zip_sha256"],
+                      "build_proof_artifact_zip_size_bytes": str(receipt["build_proof_artifact_zip_size_bytes"]),
                   }
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
@@ -592,7 +623,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
       - name: Fail closed on a completed-run or provenance mismatch
-        if: always() && (steps.discover.outcome == 'failure' || steps.discover_proof_artifact.outcome == 'failure' || (steps.discover.outputs.build_run_id != '' && steps.verify.outcome != 'success'))
+        if: always() && (steps.discover.outcome == 'failure' || steps.discover_proof_artifact.outcome == 'failure' || steps.verify_proof_artifact.outcome == 'failure' || (steps.discover.outputs.build_run_id != '' && steps.verify.outcome != 'success'))
         shell: bash
         run: |
           echo 'COMPLETED_BUILD_ATTESTATION_FAILED'

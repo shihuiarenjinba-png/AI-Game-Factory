@@ -850,6 +850,291 @@ def assert_build_run_discovery_fixture(results):
     ))
 
 
+
+def assert_proof_artifact_verifier_fixture(results):
+    """Verify proof-artifact bytes and embedded receipts with synthetic ZIPs only."""
+    import copy
+    import importlib.util
+    import io
+    import zipfile
+
+    spec = importlib.util.spec_from_file_location(
+        "proof_artifact_verifier", "qa/signal_sprint_proof_artifact_verify.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    run_id = 123456
+    proof_artifact_id = 789012
+    repository_id = 1434022838
+    workflow_head = "b" * 40
+    exe_artifact_id = 654321
+    exe = b"synthetic-exe-bytes-not-a-real-build"
+    exe_sha = hashlib.sha256(exe).hexdigest()
+    run_url = f"https://github.com/{REPO}/actions/runs/{run_id}"
+    receipt = {
+        "source_commit": SOURCE,
+        "pr30_source_commit": PR30_SOURCE,
+        "workflow_head_sha": workflow_head,
+        "exe_size_bytes": len(exe),
+        "exe_sha256": exe_sha,
+        "build_run_url": run_url,
+        "artifact_id": exe_artifact_id,
+        "artifact_exe_path": "SignalSprint.exe",
+        "artifact_provenance_path": "build-provenance.json",
+    }
+    proof = {
+        "schema": "signal-sprint-independent-build-v1",
+        "status": "PASS_INDEPENDENT_BUILD_ONLY",
+        "product_source": SOURCE,
+        "pr30_source_commit": PR30_SOURCE,
+        "pr30_ancestry_verified": True,
+        "run_id": run_id,
+        "artifact_id": exe_artifact_id,
+        "build_run_url": run_url,
+        "build_job_name": "windows-frozen-source-exe",
+        "run_status_at_verification": "in_progress",
+        "run_conclusion": None,
+        "completed_run_required": False,
+        "artifact_exe_path": "SignalSprint.exe",
+        "artifact_provenance_path": "build-provenance.json",
+        "artifact_zip_sha256": "c" * 64,
+        "artifact_zip_size_bytes": 12345,
+        "exe_size_bytes": len(exe),
+        "artifact_exe_size_bytes": len(exe),
+        "workflow_head_sha": workflow_head,
+        "exe_sha256": exe_sha,
+        "expected_run_id": None,
+        "expected_workflow_head": None,
+        "build_provenance_verified": True,
+        "independent_build_verified": True,
+        "physical_gui_verified": False,
+        "artifact_kind": "EXE_QA_UNSIGNED",
+        "msix_status": "NOT_BUILT",
+        "gdk_package_verified": False,
+        "product_acceptance": False,
+    }
+
+    def make_archive(receipt_value=None, cloud_value=None, independent_value=None, names=None):
+        values = {
+            "build-receipt.json": receipt if receipt_value is None else receipt_value,
+            "cloud-build-proof.json": proof if cloud_value is None else cloud_value,
+            "independent-build-receipt.json": proof if independent_value is None else independent_value,
+        }
+        selected = list(values.items()) if names is None else names
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as bundle:
+            for name, value in selected:
+                raw = value if isinstance(value, bytes) else json.dumps(value).encode("utf-8")
+                bundle.writestr(name, raw)
+        return output.getvalue()
+
+    archive = make_archive()
+    digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+    metadata = {
+        "id": proof_artifact_id,
+        "name": module.ARTIFACT_NAME,
+        "expired": False,
+        "size_in_bytes": len(archive),
+        "digest": digest,
+        "workflow_run": {
+            "id": run_id,
+            "head_sha": workflow_head,
+            "repository_id": repository_id,
+            "head_repository_id": repository_id,
+        },
+    }
+
+    def make_fetch(metadata_value, archive_value):
+        def fetch(url, token, accept="application/vnd.github+json"):
+            if url == f"{module.API}/actions/artifacts/{proof_artifact_id}":
+                return json.dumps(metadata_value).encode("utf-8")
+            if url == f"{module.API}/actions/artifacts/{proof_artifact_id}/zip":
+                return archive_value
+            raise AssertionError("UNEXPECTED_PROOF_ARTIFACT_API_URL")
+        return fetch
+
+    good = module.verify(
+        proof_artifact_id, digest, str(run_id), repository_id, workflow_head,
+        "fixture-token", fetch=make_fetch(metadata, archive),
+    )
+    assert good["status"] == "PASS_PROOF_ARTIFACT_BYTES_VERIFIED"
+    assert good["proof_artifact_zip_sha256"] == digest[7:]
+    assert good["proof_artifact_zip_size_bytes"] == len(archive)
+    assert good["build_receipt"]["exe_sha256"] == exe_sha
+    assert good["physical_gui_verified"] is False
+    assert good["gdk_package_verified"] is False
+    assert good["msix_status"] == "NOT_BUILT"
+    assert good["product_acceptance"] is False
+    results.append({
+        "case": "synthetic proof Artifact ZIP bytes, exact run/head and embedded EXE receipt verified",
+        "result": "PASS_SYNTHETIC",
+    })
+
+    wrong_metadata_id = copy.deepcopy(metadata)
+    wrong_metadata_id["id"] += 1
+    results.append(negative(
+        "proof artifact metadata ID mismatch",
+        lambda: module.verify(proof_artifact_id, digest, str(run_id), repository_id,
+                              workflow_head, "fixture-token",
+                              fetch=make_fetch(wrong_metadata_id, archive)),
+    ))
+    results.append(negative(
+        "proof artifact expected digest mismatch",
+        lambda: module.verify(proof_artifact_id, "sha256:" + "0" * 64, str(run_id),
+                              repository_id, workflow_head, "fixture-token",
+                              fetch=make_fetch(metadata, archive)),
+    ))
+    tampered_archive = archive[:-1] + bytes([archive[-1] ^ 1])
+    results.append(negative(
+        "proof artifact downloaded bytes digest mismatch",
+        lambda: module.verify(proof_artifact_id, digest, str(run_id), repository_id,
+                              workflow_head, "fixture-token",
+                              fetch=make_fetch(metadata, tampered_archive)),
+    ))
+    wrong_size = copy.deepcopy(metadata)
+    wrong_size["size_in_bytes"] += 1
+    results.append(negative(
+        "proof artifact ZIP size metadata mismatch",
+        lambda: module.verify(proof_artifact_id, digest, str(run_id), repository_id,
+                              workflow_head, "fixture-token",
+                              fetch=make_fetch(wrong_size, archive)),
+    ))
+    expired = copy.deepcopy(metadata)
+    expired["expired"] = True
+    results.append(negative(
+        "expired proof artifact rejected",
+        lambda: module.verify(proof_artifact_id, digest, str(run_id), repository_id,
+                              workflow_head, "fixture-token",
+                              fetch=make_fetch(expired, archive)),
+    ))
+    wrong_run = copy.deepcopy(metadata)
+    wrong_run["workflow_run"]["id"] += 1
+    results.append(negative(
+        "proof artifact wrong run rejected",
+        lambda: module.verify(proof_artifact_id, digest, str(run_id), repository_id,
+                              workflow_head, "fixture-token",
+                              fetch=make_fetch(wrong_run, archive)),
+    ))
+    wrong_head = copy.deepcopy(metadata)
+    wrong_head["workflow_run"]["head_sha"] = "d" * 40
+    results.append(negative(
+        "proof artifact wrong workflow head rejected",
+        lambda: module.verify(proof_artifact_id, digest, str(run_id), repository_id,
+                              workflow_head, "fixture-token",
+                              fetch=make_fetch(wrong_head, archive)),
+    ))
+    wrong_repository = copy.deepcopy(metadata)
+    wrong_repository["workflow_run"]["repository_id"] += 1
+    results.append(negative(
+        "proof artifact wrong repository rejected",
+        lambda: module.verify(proof_artifact_id, digest, str(run_id), repository_id,
+                              workflow_head, "fixture-token",
+                              fetch=make_fetch(wrong_repository, archive)),
+    ))
+    duplicate_archive = make_archive(names=[
+        ("build-receipt.json", receipt),
+        ("cloud-build-proof.json", proof),
+        ("independent-build-receipt.json", proof),
+        ("build-receipt.json", receipt),
+    ])
+    duplicate_meta = copy.deepcopy(metadata)
+    duplicate_meta["size_in_bytes"] = len(duplicate_archive)
+    duplicate_meta["digest"] = "sha256:" + hashlib.sha256(duplicate_archive).hexdigest()
+    results.append(negative(
+        "duplicate proof artifact member rejected",
+        lambda: module.verify(proof_artifact_id, duplicate_meta["digest"], str(run_id),
+                              repository_id, workflow_head, "fixture-token",
+                              fetch=make_fetch(duplicate_meta, duplicate_archive)),
+    ))
+    unsafe_archive = make_archive(names=[
+        ("../build-receipt.json", receipt),
+        ("cloud-build-proof.json", proof),
+        ("independent-build-receipt.json", proof),
+    ])
+    unsafe_meta = copy.deepcopy(metadata)
+    unsafe_meta["size_in_bytes"] = len(unsafe_archive)
+    unsafe_meta["digest"] = "sha256:" + hashlib.sha256(unsafe_archive).hexdigest()
+    results.append(negative(
+        "unsafe proof artifact member path rejected",
+        lambda: module.verify(proof_artifact_id, unsafe_meta["digest"], str(run_id),
+                              repository_id, workflow_head, "fixture-token",
+                              fetch=make_fetch(unsafe_meta, unsafe_archive)),
+    ))
+    missing_archive = make_archive(names=[
+        ("build-receipt.json", receipt),
+        ("cloud-build-proof.json", proof),
+    ])
+    missing_meta = copy.deepcopy(metadata)
+    missing_meta["size_in_bytes"] = len(missing_archive)
+    missing_meta["digest"] = "sha256:" + hashlib.sha256(missing_archive).hexdigest()
+    results.append(negative(
+        "missing proof artifact member rejected",
+        lambda: module.verify(proof_artifact_id, missing_meta["digest"], str(run_id),
+                              repository_id, workflow_head, "fixture-token",
+                              fetch=make_fetch(missing_meta, missing_archive)),
+    ))
+    wrong_receipt = copy.deepcopy(receipt)
+    wrong_receipt["exe_sha256"] = "0" * 64
+    wrong_receipt_archive = make_archive(receipt_value=wrong_receipt)
+    wrong_receipt_meta = copy.deepcopy(metadata)
+    wrong_receipt_meta["size_in_bytes"] = len(wrong_receipt_archive)
+    wrong_receipt_meta["digest"] = "sha256:" + hashlib.sha256(wrong_receipt_archive).hexdigest()
+    results.append(negative(
+        "proof receipt EXE SHA must match independent build proof",
+        lambda: module.verify(proof_artifact_id, wrong_receipt_meta["digest"], str(run_id),
+                              repository_id, workflow_head, "fixture-token",
+                              fetch=make_fetch(wrong_receipt_meta, wrong_receipt_archive)),
+    ))
+    false_gui = copy.deepcopy(proof)
+    false_gui["physical_gui_verified"] = True
+    false_gui_archive = make_archive(cloud_value=false_gui, independent_value=false_gui)
+    false_gui_meta = copy.deepcopy(metadata)
+    false_gui_meta["size_in_bytes"] = len(false_gui_archive)
+    false_gui_meta["digest"] = "sha256:" + hashlib.sha256(false_gui_archive).hexdigest()
+    results.append(negative(
+        "proof artifact cannot claim physical GUI PASS",
+        lambda: module.verify(proof_artifact_id, false_gui_meta["digest"], str(run_id),
+                              repository_id, workflow_head, "fixture-token",
+                              fetch=make_fetch(false_gui_meta, false_gui_archive)),
+    ))
+    disagree = copy.deepcopy(proof)
+    disagree["exe_sha256"] = "0" * 64
+    disagree_archive = make_archive(independent_value=disagree)
+    disagree_meta = copy.deepcopy(metadata)
+    disagree_meta["size_in_bytes"] = len(disagree_archive)
+    disagree_meta["digest"] = "sha256:" + hashlib.sha256(disagree_archive).hexdigest()
+    results.append(negative(
+        "proof artifact independent JSON receipts must agree",
+        lambda: module.verify(proof_artifact_id, disagree_meta["digest"], str(run_id),
+                              repository_id, workflow_head, "fixture-token",
+                              fetch=make_fetch(disagree_meta, disagree_archive)),
+    ))
+
+    helper_source = pathlib.Path("qa/signal_sprint_proof_artifact_verify.py").read_text(encoding="utf-8")
+    for token in (
+        "ARTIFACT_ZIP_DIGEST_MISMATCH",
+        "PROOF_ARTIFACT_ZIP_SIZE_MISMATCH",
+        "PROOF_ARTIFACT_RUN_MISMATCH",
+        "PROOF_ARTIFACT_HEAD_MISMATCH",
+        "PROOF_ARTIFACT_REPOSITORY_MISMATCH",
+        "PROOF_ARTIFACT_DUPLICATE_MEMBER",
+        "PROOF_ARTIFACT_UNSAFE_MEMBER_PATH",
+        "PROOF_RECEIPT_EXE_SHA_INVALID",
+        "PROOF_BUILD_EXE_SHA_MISMATCH",
+        "PROOF_BUILD_PHYSICAL_GUI_FALSE_CLAIM",
+        "PROOF_BUILD_GDK_FALSE_CLAIM",
+        "PROOF_BUILD_MSIX_FALSE_CLAIM",
+        "PROOF_BUILD_PRODUCT_ACCEPTANCE_FALSE_CLAIM",
+        "PASS_PROOF_ARTIFACT_BYTES_VERIFIED",
+    ):
+        assert token in helper_source, "PROOF_ARTIFACT_VERIFIER_GUARD_MISSING:" + token
+    results.append({
+        "case": "proof artifact verifier source has digest, lineage, JSON and non-acceptance guards",
+        "result": "PASS_STATIC_ONLY",
+    })
+
+
 def run_checks(results):
     exe = b"synthetic-fixture-only-not-a-shipping-executable"
     digest = hashlib.sha256(exe).hexdigest()
@@ -889,6 +1174,7 @@ def run_checks(results):
         kwargs.update(update)
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
     assert_independent_verifier_with_mock_api(results)
+    assert_proof_artifact_verifier_fixture(results)
     assert_build_run_discovery_fixture(results)
     assert_uia_receipt_fixture(results)
     assert_independent_build_binding_fixture(results)
@@ -961,7 +1247,24 @@ def run_checks(results):
         "proof artifact selected status": "PASS_EXACT_RUN_BUILD_PROOF_ARTIFACT_SELECTED",
         "proof artifact metadata failure": "FAIL_BUILD_PROOF_ARTIFACT_METADATA_INVALID",
         "proof artifact discovery receipt": "build-proof-artifact-discovery.json",
-        "proof artifact exact ID download": "artifact-ids: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}",
+        "proof artifact exact ID API verification": '--artifact-id "$PROOF_ARTIFACT_ID"',
+        "proof artifact exact digest API verification": '--artifact-digest "$PROOF_ARTIFACT_DIGEST"',
+        "proof artifact exact run verification": '--expected-run-id "$EXPECTED_BUILD_RUN_ID"',
+        "proof artifact exact repository verification": '--expected-repository-id "$EXPECTED_REPOSITORY_ID"',
+        "proof artifact exact head verification": '--expected-workflow-head "$EXPECTED_HEAD"',
+        "proof artifact ZIP byte verifier": "python3 qa/signal_sprint_proof_artifact_verify.py",
+        "proof artifact ZIP digest mismatch guard": "ARTIFACT_ZIP_DIGEST_MISMATCH",
+        "proof artifact ZIP size mismatch guard": "PROOF_ARTIFACT_ZIP_SIZE_MISMATCH",
+        "proof artifact receipt output": "--receipt-output evidence/build-proof/build-receipt.json",
+        "proof artifact verification evidence": "build-proof-artifact-verification.json",
+        "proof artifact verified output": "PROOF_ARTIFACT_VERIFIED: ${{ steps.verify_proof_artifact.outputs.verified }}",
+        "proof artifact ZIP SHA output": "PROOF_ARTIFACT_ZIP_SHA256: ${{ steps.verify_proof_artifact.outputs.proof_artifact_zip_sha256 }}",
+        "proof artifact ZIP size output": "PROOF_ARTIFACT_ZIP_SIZE_BYTES: ${{ steps.verify_proof_artifact.outputs.proof_artifact_zip_size_bytes }}",
+        "proof artifact byte verification gate": "steps.verify_proof_artifact.outcome == 'success'",
+        "proof artifact verification failure is fail-closed": "steps.verify_proof_artifact.outcome == 'failure'",
+        "proof artifact measured ZIP SHA in attestation": "build_proof_artifact_zip_sha256",
+        "proof artifact measured ZIP size in attestation": "build_proof_artifact_zip_size_bytes",
+        "proof artifact verified flag in attestation": "build_proof_artifact_verified",
         "proof artifact ID receipt binding": "build_proof_artifact_id",
         "proof artifact digest receipt binding": "build_proof_artifact_digest",
         "proof artifact run receipt binding": "build_proof_artifact_run_id",
@@ -986,8 +1289,11 @@ def run_checks(results):
         for label, token in completed_job_contract.items():
             assert token in candidate, "COMPLETED_BUILD_ATTESTATION_CONTRACT_MISSING:" + label
         assert "name: signal-sprint-independent-cloud-build-proof" not in candidate, "BUILD_PROOF_ARTIFACT_MUST_DOWNLOAD_BY_EXACT_ID"
-        proof_download = candidate.split("id: download_proof", 1)[1].split("      - name:", 1)[0]
-        assert "merge-multiple: true" in proof_download, "BUILD_PROOF_ARTIFACT_MUST_FLATTEN_TO_RECEIPT_PATH"
+        proof_verification = candidate.split("id: verify_proof_artifact", 1)[1].split("      - name:", 1)[0]
+        assert "python3 qa/signal_sprint_proof_artifact_verify.py" in proof_verification, "BUILD_PROOF_ARTIFACT_BYTES_NOT_VERIFIED"
+        assert "continue-on-error: true" in proof_verification, "PROOF_ARTIFACT_HOLD_MUST_STILL_UPLOAD_EVIDENCE"
+        assert "steps.verify_proof_artifact.outcome == 'success'" in candidate, "BUILD_RECEIPT_MUST_REQUIRE_PROOF_ARTIFACT_VERIFICATION"
+        assert "id: download_proof" not in candidate, "UNVERIFIED_ACTION_EXTRACTION_MUST_NOT_SUPPLY_BUILD_RECEIPT"
         assert "self-hosted" not in candidate and "signal-sprint-gdk" not in candidate, "CLOUD_ATTESTATION_MUST_NOT_ALLOCATE_PHYSICAL_GDK_RUNNER"
     for label, token in completed_job_contract.items():
         changed = completed_job.replace(token, "REMOVED_BY_MUTATION_TEST")
@@ -1267,9 +1573,10 @@ def main():
             "uia_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_bytes()).hexdigest(),
             "uia_gate_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_bytes()).hexdigest(),
             "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
+            "proof_artifact_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_proof_artifact_verify.py").read_bytes()).hexdigest(),
             "build_run_discovery_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_completed_build_discovery.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v7",
+            "schema": "signal-sprint-cloud-fixture-v8",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
