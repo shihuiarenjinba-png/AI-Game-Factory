@@ -1200,8 +1200,10 @@ def run_checks(results):
         "missing readiness evidence is fatal": "if-no-files-found: error",
     }
     def assert_gdk_readiness_contract(candidate):
+        job_header = candidate.split("    steps:", 1)[0]
         for label, token in readiness_contract.items():
-            assert token in candidate, "GDK_READINESS_CONTRACT_MISSING:" + label
+            section = job_header if label == "always-run evidence" else candidate
+            assert token in section, "GDK_READINESS_CONTRACT_MISSING:" + label
         assert "self-hosted" not in candidate, "GDK_INTAKE_MUST_NOT_ALLOCATE_PHYSICAL_RUNNER"
         assert "git push" not in candidate and "gh api --method" not in candidate, "GDK_INTAKE_MUST_NOT_MUTATE_REMOTE_STATE"
     assert_gdk_readiness_contract(readiness_job)
