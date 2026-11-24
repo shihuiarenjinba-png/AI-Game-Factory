@@ -28,7 +28,7 @@ ARTIFACT_NAME = "signal-sprint-cloud-provenance-fixture"
 ARTIFACT_MEMBER = "cloud-provenance-fixture.json"
 SOURCE = "1a349faa41663c417c40710140a4d50c79b62b78"
 REFERENCE_WIN_LOSE_HEAD = "9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2"
-SCHEMA = "signal-sprint-cloud-fixture-v10"
+SCHEMA = "signal-sprint-cloud-fixture-v11"
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 SHA40 = re.compile(r"^[a-f0-9]{40}$")
 ARTIFACT_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -43,6 +43,7 @@ MINIMUM_RESULT_COUNTS = {
 
 SOURCE_HASH_PATHS = {
     "fixture_source_sha256": "qa/signal_sprint_cloud_provenance_fixture.py",
+    "artifact_verifier_source_sha256": "qa/signal_sprint_cloud_fixture_artifact_verify.py",
     "uia_workflow_source_sha256": ".github/workflows/signal-sprint-windows-uia-evidence.yml",
     "uia_gate_source_sha256": "qa/signal_sprint_uia_dynamic_gate.ps1",
     "independent_verifier_source_sha256": "qa/signal_sprint_independent_build_verify.py",
@@ -55,6 +56,7 @@ SOURCE_HASH_PATHS = {
 
 REQUIRED_CASES = {
     "EN exact 5-button/LOST source contract",
+    "artifact verifier self-source hash is recorded in the fixture",
     "JP exact 5-button/LOST source contract",
     "dynamic UIA semantic assertions present",
     "Windows UIA binding guard exact button set and duplicate rejection",
@@ -232,7 +234,7 @@ def verify(expected_run_id, expected_repository_id, expected_workflow_head,
         if total_count == len(artifacts) and len(exact) == 1:
             break
         if attempt < 9:
-            time.sleep(1)
+            sleep_fn(1)
     else:
         if not exact:
             raise ValueError("CLOUD_FIXTURE_ARTIFACT_NOT_VISIBLE")
@@ -312,6 +314,7 @@ def verify(expected_run_id, expected_repository_id, expected_workflow_head,
         "repository_id": repository_id,
         "fixture_schema": fixture["schema"],
         "fixture_source_sha256": fixture["fixture_source_sha256"],
+        "artifact_verifier_source_sha256": fixture["artifact_verifier_source_sha256"],
         "uia_workflow_source_sha256": fixture["uia_workflow_source_sha256"],
         "fixture_result_count": summary["result_count"],
         "fixture_result_counts": summary["result_counts"],
@@ -485,6 +488,13 @@ def self_test():
                  lambda: repack({**fixture, "results": [item for item in fixture["results"] if item["case"] != "self-test filler 000"]}))
         rejected("source hash", "CLOUD_FIXTURE_SOURCE_HASH_MISMATCH",
                  lambda: repack({**fixture, "fixture_source_sha256": "0" * 64}))
+        rejected("artifact verifier source hash mismatch",
+                 "CLOUD_FIXTURE_SOURCE_HASH_MISMATCH:artifact_verifier_source_sha256",
+                 lambda: repack({**fixture, "artifact_verifier_source_sha256": "0" * 64}))
+        rejected("missing artifact verifier source hash",
+                 "CLOUD_FIXTURE_SOURCE_HASH_INVALID:artifact_verifier_source_sha256",
+                 lambda: repack({key: value for key, value in fixture.items()
+                                 if key != "artifact_verifier_source_sha256"}))
         rejected("unsafe ZIP member", "CLOUD_FIXTURE_ARTIFACT_MEMBER_MISMATCH",
                  lambda: (state.update({"archive": make_zip(fixture, "../cloud-provenance-fixture.json")}),
                           state["metadata"].update({"size_in_bytes": len(state["archive"]),
