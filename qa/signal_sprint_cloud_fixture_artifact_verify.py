@@ -189,8 +189,9 @@ def verify(expected_run_id, expected_repository_id, expected_workflow_head,
     listing_url = f"{API}/actions/runs/{run_id}/artifacts?per_page=100"
     listing = None
     artifacts = None
-    # Other jobs in this workflow upload receipts concurrently. GitHub can
-    # briefly report total_count before every Artifact row is visible.
+    exact = []
+    # GitHub can expose total_count before all Artifact rows are visible, and
+    # a just-finalized upload may take a few seconds to appear in the list.
     for attempt in range(10):
         listing = json_object(fetch(listing_url, token), "CLOUD_FIXTURE_ARTIFACT_LIST_INVALID")
         artifacts = listing.get("artifacts")
@@ -198,15 +199,17 @@ def verify(expected_run_id, expected_repository_id, expected_workflow_head,
         total_count = listing.get("total_count")
         require(type(total_count) is int and 0 <= total_count <= 100 and total_count >= len(artifacts),
                 "CLOUD_FIXTURE_ARTIFACT_COLLECTION_COUNT_INVALID")
-        if total_count == len(artifacts):
+        exact = [item for item in artifacts
+                 if isinstance(item, dict) and item.get("name") == ARTIFACT_NAME]
+        require(len(exact) <= 1, "CLOUD_FIXTURE_ARTIFACT_DUPLICATE")
+        if total_count == len(artifacts) and len(exact) == 1:
             break
         if attempt < 9:
             time.sleep(1)
     else:
+        if not exact:
+            raise ValueError("CLOUD_FIXTURE_ARTIFACT_NOT_VISIBLE")
         raise ValueError("CLOUD_FIXTURE_ARTIFACT_COLLECTION_INCOMPLETE")
-    exact = [item for item in artifacts
-             if isinstance(item, dict) and item.get("name") == ARTIFACT_NAME]
-    require(len(exact) == 1, "CLOUD_FIXTURE_ARTIFACT_DUPLICATE_OR_MISSING")
     listed = exact[0]
     artifact_id = positive_int(listed.get("id"), "CLOUD_FIXTURE_ARTIFACT_ID_INVALID")
 
@@ -340,7 +343,8 @@ def self_test():
             }
             state.clear()
             state.update({"metadata": metadata, "artifacts": [copy.deepcopy(metadata)],
-                          "archive": archive, "list_reads": 0, "simulate_listing_race": False})
+                          "archive": archive, "list_reads": 0, "simulate_listing_race": False,
+                          "simulate_fixture_visibility": False})
 
         list_url = f"{API}/actions/runs/{run_id}/artifacts?per_page=100"
 
@@ -351,6 +355,8 @@ def self_test():
                 total = len(state["artifacts"])
                 if state["simulate_listing_race"] and state["list_reads"] == 1:
                     total += 1
+                if state["simulate_fixture_visibility"] and state["list_reads"] == 1:
+                    return json.dumps({"total_count": total, "artifacts": []}).encode()
                 return json.dumps({"total_count": total,
                                    "artifacts": state["artifacts"]}).encode()
             if url == f"{API}/actions/artifacts/98765":
@@ -388,6 +394,10 @@ def self_test():
         tests += 1
         reset()
         state["simulate_listing_race"] = True
+        accepted()
+        tests += 1
+        reset()
+        state["simulate_fixture_visibility"] = True
         accepted()
         tests += 1
         rejected("digest", "CLOUD_FIXTURE_ARTIFACT_ZIP_DIGEST_MISMATCH",

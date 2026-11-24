@@ -1463,6 +1463,8 @@ def run_checks(results):
         "bounded Artifact download": "MAX_ARTIFACT_BYTES = 8 * 1024 * 1024",
         "eventual Artifact-list visibility retry": "time.sleep(1)",
         "bounded Artifact-list completeness": "CLOUD_FIXTURE_ARTIFACT_COLLECTION_INCOMPLETE",
+        "newly finalized Artifact visibility retry": "CLOUD_FIXTURE_ARTIFACT_NOT_VISIBLE",
+        "duplicate exact-name Artifact rejection": "CLOUD_FIXTURE_ARTIFACT_DUPLICATE",
         "cross-origin token stripping": "SafeRedirectHandler",
         "verifier self-test": "def self_test():",
         "verifier self-test mutation rejection": "SELF_TEST_MUTATION_ACCEPTED",
