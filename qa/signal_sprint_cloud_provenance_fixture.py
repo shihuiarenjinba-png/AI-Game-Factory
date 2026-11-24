@@ -1112,6 +1112,9 @@ def assert_proof_artifact_verifier_fixture(results):
     ))
 
     helper_source = pathlib.Path("qa/signal_sprint_proof_artifact_verify.py").read_text(encoding="utf-8")
+    workflow_source = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
+    trigger_section = workflow_source.split("  workflow_dispatch:", 1)[0]
+    assert "qa/signal_sprint_proof_artifact_verify.py" in trigger_section, "PROOF_ARTIFACT_VERIFIER_PUSH_TRIGGER_MISSING"
     for token in (
         "ARTIFACT_ZIP_DIGEST_MISMATCH",
         "PROOF_ARTIFACT_ZIP_SIZE_MISMATCH",
@@ -1253,8 +1256,6 @@ def run_checks(results):
         "proof artifact exact repository verification": '--expected-repository-id "$EXPECTED_REPOSITORY_ID"',
         "proof artifact exact head verification": '--expected-workflow-head "$EXPECTED_HEAD"',
         "proof artifact ZIP byte verifier": "python3 qa/signal_sprint_proof_artifact_verify.py",
-        "proof artifact ZIP digest mismatch guard": "ARTIFACT_ZIP_DIGEST_MISMATCH",
-        "proof artifact ZIP size mismatch guard": "PROOF_ARTIFACT_ZIP_SIZE_MISMATCH",
         "proof artifact receipt output": "--receipt-output evidence/build-proof/build-receipt.json",
         "proof artifact verification evidence": "build-proof-artifact-verification.json",
         "proof artifact verified output": "PROOF_ARTIFACT_VERIFIED: ${{ steps.verify_proof_artifact.outputs.verified }}",
@@ -1265,6 +1266,16 @@ def run_checks(results):
         "proof artifact measured ZIP SHA in attestation": "build_proof_artifact_zip_sha256",
         "proof artifact measured ZIP size in attestation": "build_proof_artifact_zip_size_bytes",
         "proof artifact verified flag in attestation": "build_proof_artifact_verified",
+        "proof verification status": "PASS_PROOF_ARTIFACT_BYTES_VERIFIED",
+        "proof artifact ID cross-binding": 'proof_verification.get("proof_artifact_id") == receipt.get("build_proof_artifact_id")',
+        "proof artifact digest cross-binding": 'proof_verification.get("proof_artifact_digest") == receipt.get("build_proof_artifact_digest")',
+        "proof artifact run cross-binding": 'proof_verification.get("build_run_id") == receipt.get("run_id")',
+        "proof artifact head cross-binding": 'proof_verification.get("workflow_head_sha") == receipt.get("workflow_head_sha")',
+        "EXE artifact ID cross-binding": 'proof_verification.get("build_artifact_id") == receipt.get("artifact_id")',
+        "EXE SHA cross-binding": 'proof_verification.get("exe_sha256") == receipt.get("exe_sha256")',
+        "EXE size cross-binding": 'proof_verification.get("exe_size_bytes") == receipt.get("exe_size_bytes")',
+        "EXE artifact ZIP digest cross-binding": 'proof_verification["cloud_build_proof"].get("artifact_zip_sha256") == receipt.get("artifact_zip_sha256")',
+        "EXE artifact ZIP size cross-binding": 'proof_verification["cloud_build_proof"].get("artifact_zip_size_bytes") == receipt.get("artifact_zip_size_bytes")',
         "proof artifact ID receipt binding": "build_proof_artifact_id",
         "proof artifact digest receipt binding": "build_proof_artifact_digest",
         "proof artifact run receipt binding": "build_proof_artifact_run_id",

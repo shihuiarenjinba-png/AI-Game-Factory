@@ -417,12 +417,12 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          GITHUB_TOKEN: \${{ github.token }}
-          PROOF_ARTIFACT_ID: \${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
-          PROOF_ARTIFACT_DIGEST: \${{ steps.discover_proof_artifact.outputs.proof_artifact_digest }}
-          EXPECTED_BUILD_RUN_ID: \${{ steps.discover.outputs.build_run_id }}
-          EXPECTED_REPOSITORY_ID: \${{ steps.discover.outputs.build_repository_id }}
-          EXPECTED_HEAD: \${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PROOF_ARTIFACT_ID: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
+          PROOF_ARTIFACT_DIGEST: ${{ steps.discover_proof_artifact.outputs.proof_artifact_digest }}
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_REPOSITORY_ID: ${{ steps.discover.outputs.build_repository_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
           python3 qa/signal_sprint_proof_artifact_verify.py \
@@ -529,6 +529,13 @@ jobs:
           path = Path("evidence/completed-build-attestation.json")
           receipt = {}
           outputs = {}
+          proof_verification = {}
+          proof_verification_path = Path("evidence/build-proof-artifact-verification.json")
+          if proof_verification_path.is_file():
+              try:
+                  proof_verification = json.loads(proof_verification_path.read_text(encoding="utf-8"))
+              except (ValueError, OSError):
+                  proof_verification = {}
           if path.is_file():
               try:
                   receipt = json.loads(path.read_text(encoding="utf-8"))
@@ -543,9 +550,9 @@ jobs:
               proof_artifact_digest = os.environ.get("PROOF_ARTIFACT_DIGEST", "")
               proof_artifact_run_id = os.environ.get("PROOF_ARTIFACT_RUN_ID", "")
               proof_artifact_head = os.environ.get("PROOF_ARTIFACT_WORKFLOW_HEAD_SHA", "")
-          proof_artifact_verified = os.environ.get("PROOF_ARTIFACT_VERIFIED", "")
-          proof_artifact_zip_sha256 = os.environ.get("PROOF_ARTIFACT_ZIP_SHA256", "")
-          proof_artifact_zip_size_bytes = os.environ.get("PROOF_ARTIFACT_ZIP_SIZE_BYTES", "")
+              proof_artifact_verified = os.environ.get("PROOF_ARTIFACT_VERIFIED", "")
+              proof_artifact_zip_sha256 = os.environ.get("PROOF_ARTIFACT_ZIP_SHA256", "")
+              proof_artifact_zip_size_bytes = os.environ.get("PROOF_ARTIFACT_ZIP_SIZE_BYTES", "")
               if (
                   not re.fullmatch(r"[1-9][0-9]*", proof_artifact_id)
                   or not re.fullmatch(r"sha256:[0-9a-f]{64}", proof_artifact_digest)
@@ -591,6 +598,19 @@ jobs:
                   and bool(re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("build_proof_artifact_zip_sha256") or "")))
                   and type(receipt.get("build_proof_artifact_zip_size_bytes")) is int and receipt["build_proof_artifact_zip_size_bytes"] > 0
                   and receipt.get("build_proof_artifact_zip_sha256") == str(receipt.get("build_proof_artifact_digest"))[7:]
+                  and proof_verification.get("status") == "PASS_PROOF_ARTIFACT_BYTES_VERIFIED"
+                  and proof_verification.get("proof_artifact_id") == receipt.get("build_proof_artifact_id")
+                  and proof_verification.get("proof_artifact_digest") == receipt.get("build_proof_artifact_digest")
+                  and proof_verification.get("proof_artifact_zip_sha256") == receipt.get("build_proof_artifact_zip_sha256")
+                  and proof_verification.get("proof_artifact_zip_size_bytes") == receipt.get("build_proof_artifact_zip_size_bytes")
+                  and proof_verification.get("build_run_id") == receipt.get("run_id")
+                  and proof_verification.get("workflow_head_sha") == receipt.get("workflow_head_sha")
+                  and proof_verification.get("build_artifact_id") == receipt.get("artifact_id")
+                  and proof_verification.get("exe_sha256") == receipt.get("exe_sha256")
+                  and proof_verification.get("exe_size_bytes") == receipt.get("exe_size_bytes")
+                  and isinstance(proof_verification.get("cloud_build_proof"), dict)
+                  and proof_verification["cloud_build_proof"].get("artifact_zip_sha256") == receipt.get("artifact_zip_sha256")
+                  and proof_verification["cloud_build_proof"].get("artifact_zip_size_bytes") == receipt.get("artifact_zip_size_bytes")
               )
               if not valid:
                   if status == "PASS_INDEPENDENT_BUILD_ONLY":
