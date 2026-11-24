@@ -832,7 +832,7 @@ def run_checks(results):
         "hosted cloud runner": "runs-on: ubuntu-latest",
         "cloud push path": "github.event_name == 'push'",
         "independent dependency": "needs: [cloud-provenance-fixture]",
-        "exact-head selector invocation": "select_exact_head_build_run(runs, expected_head)",
+        "exact-head selector invocation": "select_exact_head_build_run(runs, expected_head, repo=repo)",
         "pinned build workflow ID": "/actions/workflows/427222317/runs",
         "exact-head selector helper import": "signal_sprint_completed_build_discovery",
         "build run completion check": 'latest_status == "completed"',
