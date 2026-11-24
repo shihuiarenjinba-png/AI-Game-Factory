@@ -1461,6 +1461,8 @@ def run_checks(results):
         "independent build false-claim guard": "CLOUD_FIXTURE_JSON_FALSE_BUILD_CLAIM",
         "product acceptance false-claim guard": "CLOUD_FIXTURE_JSON_PRODUCT_ACCEPTANCE_TRUE",
         "bounded Artifact download": "MAX_ARTIFACT_BYTES = 8 * 1024 * 1024",
+        "eventual Artifact-list visibility retry": "time.sleep(1)",
+        "bounded Artifact-list completeness": "CLOUD_FIXTURE_ARTIFACT_COLLECTION_INCOMPLETE",
         "cross-origin token stripping": "SafeRedirectHandler",
         "verifier self-test": "def self_test():",
         "verifier self-test mutation rejection": "SELF_TEST_MUTATION_ACCEPTED",
