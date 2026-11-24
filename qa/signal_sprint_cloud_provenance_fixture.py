@@ -1227,7 +1227,7 @@ def run_checks(results):
         '"pr30_source_modified": False',
     ):
         assert token in intake_script, "GDK_INTAKE_READ_ONLY_GUARD_MISSING:" + token
-    assert "git ls-remote --heads FACTORY_URL" in intake_script, "GDK_INTAKE_MUST_READ_LIVE_FACTORY_REFS"
+    assert '["git", "ls-remote", "--heads", FACTORY_URL]' in intake_script, "GDK_INTAKE_MUST_READ_LIVE_FACTORY_REFS"
     results.append({
         "case": "GDK intake is hosted exact-source read-only request derivation; no submission, CAS, SDK, MSIX, or ledger writes",
         "result": "PASS_STATIC_ONLY",
