@@ -1525,11 +1525,12 @@ def run_checks(results):
         "case": "artifact verifier self-source hash is recorded in the fixture",
         "result": "PASS_STATIC_ONLY",
     })
+    def assert_fixture_artifact_verifier_hash(candidate):
+        assert verifier_hash_writer in candidate, "FIXTURE_ARTIFACT_VERIFIER_SOURCE_HASH_NOT_RECORDED"
     mutated_fixture_source = fixture_source.replace(verifier_hash_writer, "REMOVED_BY_MUTATION_TEST", 1)
     results.append(negative(
         "fixture writer must reject removal of artifact verifier source hash",
-        lambda candidate=mutated_fixture_source: (_ for _ in ()).throw(AssertionError("FIXTURE_ARTIFACT_VERIFIER_SOURCE_HASH_NOT_RECORDED"))
-            if verifier_hash_writer not in candidate else None,
+        lambda candidate=mutated_fixture_source: assert_fixture_artifact_verifier_hash(candidate),
     ))
     assert "runs-on: ubuntu-latest" in cloud_job, "CLOUD_JOB_NOT_HOSTED"
     assert "python3 qa/signal_sprint_cloud_provenance_fixture.py" in cloud_job, "CLOUD_FIXTURE_NOT_EXECUTED"
