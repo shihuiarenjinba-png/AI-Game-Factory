@@ -385,6 +385,10 @@ def _validate_sdk_capability(path: Path | None, build: dict):
         makepkg = probe.get("makepkg")
         if isinstance(makepkg, dict) and makepkg.get("effective_version") != expected_version:
             errors.append("SDK_CAPABILITY_MAKEPKG_VERSION_MISMATCH")
+        validator = probe.get("submission_validator")
+        if (isinstance(validator, dict)
+                and validator.get("effective_version") != expected_version):
+            errors.append("SDK_CAPABILITY_SUBMISSION_VALIDATOR_VERSION_MISMATCH")
 
     if errors:
         return {
