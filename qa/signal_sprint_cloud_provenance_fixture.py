@@ -1469,6 +1469,7 @@ def run_checks(results):
         "verifier self-test": "def self_test():",
         "verifier self-test mutation rejection": "SELF_TEST_MUTATION_ACCEPTED",
         "verifier self-source hash binding": "artifact_verifier_source_sha256",
+        "metadata visibility retry": "fetch_artifact_metadata",
     }
     def assert_cloud_fixture_verifier_source(candidate):
         for label, token in artifact_verifier_tokens.items():
