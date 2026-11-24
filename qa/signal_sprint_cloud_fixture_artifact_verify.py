@@ -35,6 +35,11 @@ ARTIFACT_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
 MAX_JSON_BYTES = 1024 * 1024
 PASS_RESULTS = {"PASS_SYNTHETIC", "PASS_REJECTED", "PASS_STATIC_ONLY"}
+MINIMUM_RESULT_COUNTS = {
+    "PASS_SYNTHETIC": 13,
+    "PASS_REJECTED": 368,
+    "PASS_STATIC_ONLY": 144,
+}
 
 SOURCE_HASH_PATHS = {
     "fixture_source_sha256": "qa/signal_sprint_cloud_provenance_fixture.py",
@@ -170,6 +175,9 @@ def validate_fixture(fixture, run_id, repository_id, workflow_head, source_root)
     for case in REQUIRED_CASES:
         require(cases[case] == "PASS_STATIC_ONLY",
                 "CLOUD_FIXTURE_REQUIRED_CASE_NOT_STATIC_PASS:" + case)
+    for status, minimum in MINIMUM_RESULT_COUNTS.items():
+        require(counts.get(status, 0) >= minimum,
+                "CLOUD_FIXTURE_RESULT_COUNT_BELOW_MINIMUM:" + status)
     return {"result_count": len(results), "result_counts": counts,
             "required_case_count": len(REQUIRED_CASES),
             "source_hashes_verified": len(SOURCE_HASH_PATHS)}
@@ -318,8 +326,12 @@ def self_test():
             hashes[field] = hashlib.sha256(path.read_bytes()).hexdigest()
         results = [{"case": case, "result": "PASS_STATIC_ONLY"}
                    for case in sorted(REQUIRED_CASES)]
+        results += [{"case": f"self-test synthetic {i:03d}", "result": "PASS_SYNTHETIC"}
+                    for i in range(MINIMUM_RESULT_COUNTS["PASS_SYNTHETIC"])]
+        results += [{"case": f"self-test rejected {i:03d}", "result": "PASS_REJECTED"}
+                    for i in range(MINIMUM_RESULT_COUNTS["PASS_REJECTED"])]
         results += [{"case": f"self-test filler {i:03d}", "result": "PASS_STATIC_ONLY"}
-                    for i in range(100)]
+                    for i in range(MINIMUM_RESULT_COUNTS["PASS_STATIC_ONLY"] - len(REQUIRED_CASES))]
         fixture = {
             "schema": SCHEMA, "status": "PASS", "failure": None,
             "workflow_head": head, "actions_run_id": run_id, **hashes,
@@ -428,6 +440,12 @@ def self_test():
                    if item["case"] != sorted(REQUIRED_CASES)[0]]
         rejected("required button/LOST case", "CLOUD_FIXTURE_REQUIRED_CASE_MISSING",
                  lambda: repack({**fixture, "results": missing}))
+        rejected("synthetic coverage floor", "CLOUD_FIXTURE_RESULT_COUNT_BELOW_MINIMUM:PASS_SYNTHETIC",
+                 lambda: repack({**fixture, "results": [item for item in fixture["results"] if item["case"] != "self-test synthetic 000"]}))
+        rejected("mutation rejection coverage floor", "CLOUD_FIXTURE_RESULT_COUNT_BELOW_MINIMUM:PASS_REJECTED",
+                 lambda: repack({**fixture, "results": [item for item in fixture["results"] if item["case"] != "self-test rejected 000"]}))
+        rejected("static contract coverage floor", "CLOUD_FIXTURE_RESULT_COUNT_BELOW_MINIMUM:PASS_STATIC_ONLY",
+                 lambda: repack({**fixture, "results": [item for item in fixture["results"] if item["case"] != "self-test filler 000"]}))
         rejected("source hash", "CLOUD_FIXTURE_SOURCE_HASH_MISMATCH",
                  lambda: repack({**fixture, "fixture_source_sha256": "0" * 64}))
         rejected("unsafe ZIP member", "CLOUD_FIXTURE_ARTIFACT_MEMBER_MISMATCH",
