@@ -167,7 +167,8 @@ jobs:
             "independent_build_verified": false,
             "physical_gui_verified": false,
             "gdk_package_verified": false,
-            "msix_status": "NOT_BUILT"
+            "msix_status": "NOT_BUILT",
+            "product_acceptance": false
           }
           JSON
       - name: Find exact-head completed cloud build run
@@ -546,6 +547,10 @@ jobs:
                   and receipt.get("run_conclusion") == "success"
                   and receipt.get("independent_build_verified") is True
                   and receipt.get("build_provenance_verified") is True
+                  and receipt.get("physical_gui_verified") is False
+                  and receipt.get("gdk_package_verified") is False
+                  and receipt.get("msix_status") == "NOT_BUILT"
+                  and receipt.get("product_acceptance") is False
                   and receipt.get("workflow_head_sha") == os.environ.get("GITHUB_SHA")
                   and receipt.get("product_source") == "1a349faa41663c417c40710140a4d50c79b62b78"
                   and receipt.get("pr30_source_commit") == "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
