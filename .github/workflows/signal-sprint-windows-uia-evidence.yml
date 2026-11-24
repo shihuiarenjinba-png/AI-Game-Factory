@@ -6,6 +6,7 @@ on:
       - codex/signal-sprint-cloud-build-proof-20261123
     paths:
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_completed_build_discovery.py'
       - 'qa/signal_sprint_independent_build_verify.py'
       - 'qa/signal_sprint_uia_dynamic_gate.ps1'
       - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
@@ -184,6 +185,7 @@ jobs:
           import urllib.parse
           import urllib.request
           from pathlib import Path
+          from qa.signal_sprint_completed_build_discovery import select_exact_head_build_run
 
           repo = "shihuiarenjinba-png/AI-Game-Factory"
           expected_head = os.environ.get("EXPECTED_HEAD", "")
@@ -219,25 +221,8 @@ jobs:
                   runs = payload.get("workflow_runs")
                   if not isinstance(runs, list):
                       raise ValueError("WORKFLOW_RUNS_INVALID")
-                  candidates = [
-                      run for run in runs
-                      if isinstance(run, dict)
-                      and run.get("head_sha") == expected_head
-                      and run.get("path") == ".github/workflows/signal-sprint-cloud-build-proof.yml"
-                      and run.get("event") == "push"
-                      and run.get("repository", {}).get("full_name") == repo
-                      and type(run.get("id")) is int and run["id"] > 0
-                  ]
-                  candidates.sort(
-                      key=lambda run: (
-                          int(run.get("run_number") or 0),
-                          int(run.get("run_attempt") or 0),
-                          int(run.get("id") or 0),
-                      ),
-                      reverse=True,
-                  )
-                  if candidates:
-                      run = candidates[0]
+                  run = select_exact_head_build_run(runs, expected_head, repo=repo)
+                  if run is not None:
                       latest_status = run.get("status")
                       latest_run_id = run.get("id")
                       if latest_status == "completed":
