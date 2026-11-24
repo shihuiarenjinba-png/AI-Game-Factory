@@ -1470,7 +1470,7 @@ def run_checks(results):
             assert token in candidate, "CLOUD_FIXTURE_ARTIFACT_VERIFIER_SOURCE_GUARD_MISSING:" + label
     assert_cloud_fixture_verifier_source(artifact_verifier)
     for label, token in artifact_verifier_tokens.items():
-        changed = artifact_verifier.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
+        changed = artifact_verifier.replace(token, "REMOVED_BY_MUTATION_TEST")
         assert changed != artifact_verifier, "CLOUD_FIXTURE_ARTIFACT_VERIFIER_MUTATION_NO_EFFECT:" + label
         results.append(negative(
             "cloud fixture Artifact verifier source mutation reject " + label,
@@ -1483,8 +1483,8 @@ def run_checks(results):
         "fixture upload path": "path: evidence/cloud-provenance-fixture.json",
         "post-upload exact Artifact verifier": "- name: Verify uploaded cloud fixture Artifact digest and embedded JSON",
         "always-run verification": "- name: Verify uploaded cloud fixture Artifact digest and embedded JSON\n        if: always()",
-        "GitHub token binding": "GITHUB_TOKEN: \${{ github.token }}",
-        "expected repository binding": "EXPECTED_REPOSITORY_ID: \${{ github.repository_id }}",
+        "GitHub token binding": "GITHUB_TOKEN: ${{ github.token }}",
+        "expected repository binding": "EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}",
         "expected run binding": '--expected-run-id "$ACTIONS_RUN_ID"',
         "expected repository CLI binding": '--expected-repository-id "$EXPECTED_REPOSITORY_ID"',
         "expected workflow-head CLI binding": '--expected-workflow-head "$EXPECTED_HEAD"',
@@ -1499,7 +1499,7 @@ def run_checks(results):
             assert token in fixture_job, "CLOUD_FIXTURE_ARTIFACT_WORKFLOW_GUARD_MISSING:" + label
     assert_cloud_fixture_workflow_contract(workflow)
     for label, token in artifact_workflow_tokens.items():
-        changed = workflow.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
+        changed = workflow.replace(token, "REMOVED_BY_MUTATION_TEST")
         assert changed != workflow, "CLOUD_FIXTURE_ARTIFACT_WORKFLOW_MUTATION_NO_EFFECT:" + label
         results.append(negative(
             "cloud fixture Artifact workflow mutation reject " + label,
