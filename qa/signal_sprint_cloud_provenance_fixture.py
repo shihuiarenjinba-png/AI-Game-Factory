@@ -645,6 +645,104 @@ def assert_independent_verifier_with_mock_api(results):
             finally:
                 setattr(module, attribute, original)
 
+
+def assert_build_run_discovery_fixture(results):
+    """Exercise exact-head run filtering and retry ordering without GitHub API access."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "signal_sprint_completed_build_discovery",
+        "qa/signal_sprint_completed_build_discovery.py",
+    )
+    assert spec is not None and spec.loader is not None, "BUILD_DISCOVERY_HELPER_IMPORT_FAILED"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    select = module.select_exact_head_build_run
+    expected = "a" * 40
+    path = module.WORKFLOW_PATH
+
+    def candidate(run_id, run_number, attempt=1, **updates):
+        value = {
+            "id": run_id,
+            "run_number": run_number,
+            "run_attempt": attempt,
+            "head_sha": expected,
+            "path": path,
+            "event": "push",
+            "repository": {"full_name": module.REPOSITORY},
+            "status": "completed",
+            "conclusion": "success",
+        }
+        value.update(updates)
+        return value
+
+    older = candidate(1001, 20)
+    latest = candidate(1002, 21, status="in_progress", conclusion=None)
+    latest_rerun = candidate(1002, 21, attempt=2, status="completed", conclusion="success")
+    ignored = [
+        candidate(2001, 99, head_sha="b" * 40),
+        candidate(2002, 99, path=".github/workflows/factory-ci.yml"),
+        candidate(2003, 99, event="pull_request"),
+        candidate(2004, 99, repository={"full_name": "other/repository"}),
+        None,
+        "not-a-run-object",
+    ]
+    selected = select([*ignored, older, latest, latest_rerun], expected)
+    assert selected is latest_rerun, "BUILD_DISCOVERY_RETRY_ORDER_OR_FILTER_MISMATCH"
+    results.append({
+        "case": "exact-head build discovery filters repo/workflow/event/head and selects latest rerun",
+        "result": "PASS_SYNTHETIC",
+    })
+
+    failed_latest = candidate(1003, 22, status="completed", conclusion="failure")
+    selected_failure = select([older, failed_latest], expected)
+    assert selected_failure is failed_latest, "BUILD_DISCOVERY_MUST_NOT_FALL_BACK_PAST_LATEST_FAILURE"
+    results.append({
+        "case": "latest completed failed build remains selected; older success cannot mask it",
+        "result": "PASS_SYNTHETIC",
+    })
+
+    in_progress_latest = candidate(1004, 23, status="in_progress", conclusion=None)
+    selected_in_progress = select([older, in_progress_latest], expected)
+    assert selected_in_progress is in_progress_latest, "BUILD_DISCOVERY_MUST_WAIT_FOR_LATEST_EXACT_HEAD_RUN"
+    results.append({
+        "case": "latest in-progress exact-head build remains selected over older completed success",
+        "result": "PASS_SYNTHETIC",
+    })
+
+    tie_low = candidate(1005, 24, attempt=2)
+    tie_high = candidate(1006, 24, attempt=2)
+    assert select([tie_low, tie_high], expected) is tie_high, "BUILD_DISCOVERY_RUN_ID_TIE_BREAK_MISMATCH"
+    results.append({
+        "case": "exact-head run selector applies deterministic run-ID tie-break",
+        "result": "PASS_SYNTHETIC",
+    })
+
+    results.append(negative(
+        "build discovery rejects malformed expected HEAD",
+        lambda: select([older], "not-a-sha"),
+    ))
+    results.append(negative(
+        "build discovery rejects non-list API workflow_runs",
+        lambda: select({"workflow_runs": [older]}, expected),
+    ))
+    results.append(negative(
+        "build discovery rejects invalid ID on an otherwise matching run",
+        lambda: select([candidate(True, 25)], expected),
+    ))
+    results.append(negative(
+        "build discovery rejects invalid run number on an otherwise matching run",
+        lambda: select([candidate(1007, 0)], expected),
+    ))
+    results.append(negative(
+        "build discovery rejects invalid rerun attempt on an otherwise matching run",
+        lambda: select([candidate(1008, 25, attempt=False)], expected),
+    ))
+    results.append(negative(
+        "build discovery rejects invalid repository selector",
+        lambda: select([older], expected, repo=""),
+    ))
+
+
 def run_checks(results):
     exe = b"synthetic-fixture-only-not-a-shipping-executable"
     digest = hashlib.sha256(exe).hexdigest()
@@ -684,6 +782,7 @@ def run_checks(results):
         kwargs.update(update)
         results.append(negative(name, lambda kw=kwargs: validate(**kw)))
     assert_independent_verifier_with_mock_api(results)
+    assert_build_run_discovery_fixture(results)
     assert_uia_receipt_fixture(results)
     assert_independent_build_binding_fixture(results)
     # The proof workflow builds only an unsigned pre-GDK EXE from the immutable product source.
@@ -733,9 +832,9 @@ def run_checks(results):
         "hosted cloud runner": "runs-on: ubuntu-latest",
         "cloud push path": "github.event_name == 'push'",
         "independent dependency": "needs: [cloud-provenance-fixture]",
-        "exact-head workflow run lookup": "head_sha",
+        "exact-head selector invocation": "select_exact_head_build_run(runs, expected_head)",
         "pinned build workflow ID": "/actions/workflows/427222317/runs",
-        "build run path validation": ".github/workflows/signal-sprint-cloud-build-proof.yml",
+        "exact-head selector helper import": "signal_sprint_completed_build_discovery",
         "build run completion check": 'latest_status == "completed"',
         "completed build receipt artifact": "signal-sprint-independent-cloud-build-proof",
         "exact build EXE artifact ID": "artifact-ids: ${{ steps.receipt.outputs.artifact_id }}",
@@ -1028,8 +1127,9 @@ def main():
             "uia_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_bytes()).hexdigest(),
             "uia_gate_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_bytes()).hexdigest(),
             "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
+            "build_run_discovery_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_completed_build_discovery.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v4",
+            "schema": "signal-sprint-cloud-fixture-v5",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
