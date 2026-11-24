@@ -1519,7 +1519,7 @@ def run_checks(results):
         "result": "PASS_STATIC_ONLY",
     })
     fixture_source = pathlib.Path(__file__).read_text(encoding="utf-8")
-    verifier_hash_output_line = '            "artifact_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_cloud_fixture_artifact_verify.py").read_bytes()).hexdigest(),\\n'
+    verifier_hash_output_line = '            "artifact_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_cloud_fixture_artifact_verify.py").read_bytes()).hexdigest(),\n'
     assert verifier_hash_output_line in fixture_source, "FIXTURE_ARTIFACT_VERIFIER_SOURCE_HASH_NOT_RECORDED"
     results.append({
         "case": "artifact verifier self-source hash is recorded in the fixture",
@@ -1528,7 +1528,7 @@ def run_checks(results):
     def assert_fixture_artifact_verifier_hash(candidate):
         assert verifier_hash_output_line in candidate, "FIXTURE_ARTIFACT_VERIFIER_SOURCE_HASH_NOT_RECORDED"
     mutated_fixture_source = fixture_source.replace(
-        verifier_hash_output_line, "            # REMOVED_BY_MUTATION_TEST\\n", 1
+        verifier_hash_output_line, "            # REMOVED_BY_MUTATION_TEST\n", 1
     )
     results.append(negative(
         "fixture writer must reject removal of artifact verifier source hash",
