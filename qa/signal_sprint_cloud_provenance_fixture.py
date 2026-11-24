@@ -1468,6 +1468,7 @@ def run_checks(results):
         "cross-origin token stripping": "SafeRedirectHandler",
         "verifier self-test": "def self_test():",
         "verifier self-test mutation rejection": "SELF_TEST_MUTATION_ACCEPTED",
+        "verifier self-source hash binding": "artifact_verifier_source_sha256",
     }
     def assert_cloud_fixture_verifier_source(candidate):
         for label, token in artifact_verifier_tokens.items():
@@ -1517,6 +1518,19 @@ def run_checks(results):
         "case": "cloud fixture Artifact verification workflow self-test and upload contract present",
         "result": "PASS_STATIC_ONLY",
     })
+    fixture_source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    verifier_hash_writer = '"artifact_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_cloud_fixture_artifact_verify.py").read_bytes()).hexdigest(),'
+    assert verifier_hash_writer in fixture_source, "FIXTURE_ARTIFACT_VERIFIER_SOURCE_HASH_NOT_RECORDED"
+    results.append({
+        "case": "artifact verifier self-source hash is recorded in the fixture",
+        "result": "PASS_STATIC_ONLY",
+    })
+    mutated_fixture_source = fixture_source.replace(verifier_hash_writer, "REMOVED_BY_MUTATION_TEST", 1)
+    results.append(negative(
+        "fixture writer must reject removal of artifact verifier source hash",
+        lambda candidate=mutated_fixture_source: (_ for _ in ()).throw(AssertionError("FIXTURE_ARTIFACT_VERIFIER_SOURCE_HASH_NOT_RECORDED"))
+            if verifier_hash_writer not in candidate else None,
+    ))
     assert "runs-on: ubuntu-latest" in cloud_job, "CLOUD_JOB_NOT_HOSTED"
     assert "python3 qa/signal_sprint_cloud_provenance_fixture.py" in cloud_job, "CLOUD_FIXTURE_NOT_EXECUTED"
     assert "if: always()" in cloud_job, "CLOUD_FAILURE_EVIDENCE_NOT_GUARANTEED"
@@ -1707,6 +1721,7 @@ def main():
             "workflow_head": os.environ.get("EXPECTED_HEAD"),
             "actions_run_id": os.environ.get("ACTIONS_RUN_ID"),
             "fixture_source_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+            "artifact_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_cloud_fixture_artifact_verify.py").read_bytes()).hexdigest(),
             "uia_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_bytes()).hexdigest(),
             "uia_gate_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_uia_dynamic_gate.ps1").read_bytes()).hexdigest(),
             "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
@@ -1715,7 +1730,7 @@ def main():
             "gdk_current_source_intake_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_gdk_current_source_intake.py").read_bytes()).hexdigest(),
             "gdk_current_source_intake_test_source_sha256": hashlib.sha256(pathlib.Path("products/signal-sprint/tests/test_gdk_current_source_intake.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v10",
+            "schema": "signal-sprint-cloud-fixture-v11",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
