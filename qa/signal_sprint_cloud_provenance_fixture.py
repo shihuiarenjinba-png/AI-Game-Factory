@@ -114,6 +114,10 @@ def validate_independent_build_binding(build, preflight):
     assert build.get("independent_build_verified") is True, "INDEPENDENT_BUILD_NOT_VERIFIED"
     assert build.get("completed_run_required") is True, "INDEPENDENT_BUILD_RUN_NOT_COMPLETED_ATTESTED"
     assert build.get("run_status_at_verification") == "completed" and build.get("run_conclusion") == "success", "INDEPENDENT_BUILD_RUN_NOT_COMPLETED_SUCCESS"
+    assert build.get("physical_gui_verified") is False, "PHYSICAL_GUI_MUST_REMAIN_UNVERIFIED"
+    assert build.get("gdk_package_verified") is False, "GDK_PACKAGE_MUST_REMAIN_UNVERIFIED"
+    assert build.get("msix_status") == "NOT_BUILT", "ORDINARY_MSIX_MUST_REMAIN_NOT_BUILT"
+    assert build.get("product_acceptance") is False, "PRODUCT_ACCEPTANCE_MUST_REMAIN_FALSE"
 
     workflow_head = preflight.get("workflow_head")
     build_workflow_head = preflight.get("build_workflow_head_sha")
@@ -202,6 +206,10 @@ def assert_independent_build_binding_fixture(results):
         "completed_run_required": True,
         "run_status_at_verification": "completed",
         "run_conclusion": "success",
+        "physical_gui_verified": False,
+        "gdk_package_verified": False,
+        "msix_status": "NOT_BUILT",
+        "product_acceptance": False,
         "workflow_head_sha": workflow_head,
         "run_id": run_id,
         "artifact_id": artifact_id,
@@ -301,6 +309,18 @@ def assert_independent_build_binding_fixture(results):
     failed_status = copy.deepcopy(build)
     failed_status["status"] = "FAIL"
     mutations.append(("independent build status not PASS", failed_status, preflight))
+    gui_claim = copy.deepcopy(build)
+    gui_claim["physical_gui_verified"] = True
+    mutations.append(("cloud build cannot claim physical GUI PASS", gui_claim, preflight))
+    gdk_claim = copy.deepcopy(build)
+    gdk_claim["gdk_package_verified"] = True
+    mutations.append(("cloud build cannot claim GDK package PASS", gdk_claim, preflight))
+    msix_claim = copy.deepcopy(build)
+    msix_claim["msix_status"] = "BUILT"
+    mutations.append(("cloud build cannot claim ordinary MSIX", msix_claim, preflight))
+    product_claim = copy.deepcopy(build)
+    product_claim["product_acceptance"] = True
+    mutations.append(("independent build cannot claim product acceptance", product_claim, preflight))
     for label, candidate, candidate_preflight in mutations:
         results.append(negative("synthetic build/UIA binding " + label,
                                 lambda b=candidate, p=candidate_preflight: validate_independent_build_binding(b, p)))
@@ -904,6 +924,12 @@ def run_checks(results):
                   "pr30_ancestry_verified"):
         assert token in verifier_source, "INDEPENDENT_PR30_ANCESTRY_GUARD_MISSING:" + token
     results.append({"case": "independent verifier proves fixed PR30 source is ancestor of frozen build source", "result": "PASS_STATIC_ONLY"})
+    for token in (
+        '"physical_gui_verified": False', '"gdk_package_verified": False',
+        '"msix_status": "NOT_BUILT"', '"product_acceptance": False',
+    ):
+        assert token in verifier_source, "INDEPENDENT_BUILD_NEGATIVE_CLAIM_MISSING:" + token
+    results.append({"case": "independent verifier explicitly denies GUI GDK MSIX and product acceptance", "result": "PASS_STATIC_ONLY"})
     results.append({"case": "frozen source unsigned EXE builder never claims GDK/MSIX package", "result": "PASS_STATIC_ONLY"})
     # Keep the cloud fixture aligned with the actual Windows preflight contract.
     workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
@@ -923,6 +949,10 @@ def run_checks(results):
         "pinned build workflow ID": "/actions/workflows/427222317/runs",
         "exact-head selector helper import": "signal_sprint_completed_build_discovery",
         "build run completion check": 'latest_status == "completed"',
+        "physical GUI must remain false": 'receipt.get("physical_gui_verified") is False',
+        "GDK package must remain false": 'receipt.get("gdk_package_verified") is False',
+        "ordinary MSIX must remain not built": 'receipt.get("msix_status") == "NOT_BUILT"',
+        "product acceptance must remain false": 'receipt.get("product_acceptance") is False',
         "proof artifact selector": "select_exact_head_build_artifact",
         "proof artifact API endpoint": "actions/runs/{run_id}/artifacts",
         "proof artifact retry loop": "for attempt in range(30):",
