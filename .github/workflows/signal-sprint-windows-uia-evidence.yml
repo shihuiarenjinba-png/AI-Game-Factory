@@ -6,6 +6,7 @@ on:
       - codex/signal-sprint-cloud-build-proof-20261123
     paths:
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_cloud_fixture_artifact_verify.py'
       - 'qa/signal_sprint_completed_build_discovery.py'
       - 'qa/signal_sprint_independent_build_verify.py'
       - 'qa/signal_sprint_proof_artifact_verify.py'
