@@ -64,3 +64,53 @@ def select_exact_head_build_run(
         candidates,
         key=lambda item: (item["run_number"], item["run_attempt"], item["id"]),
     )
+
+BUILD_PROOF_ARTIFACT_NAME = "signal-sprint-independent-cloud-build-proof"
+ARTIFACT_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def select_exact_head_build_artifact(
+    artifacts: object,
+    expected_run_id: object,
+    expected_head: object,
+    expected_repository_id: object,
+) -> dict | None:
+    """Select one exact-run proof artifact by ID; never fall back to a name-only download."""
+    _positive_integer(expected_run_id, "EXPECTED_BUILD_RUN_ID_INVALID")
+    _positive_integer(expected_repository_id, "EXPECTED_REPOSITORY_ID_INVALID")
+    if not isinstance(expected_head, str) or SHA40.fullmatch(expected_head) is None:
+        raise ValueError("EXPECTED_HEAD_INVALID")
+    if not isinstance(artifacts, list):
+        raise ValueError("WORKFLOW_ARTIFACTS_INVALID")
+
+    named = [
+        artifact for artifact in artifacts
+        if isinstance(artifact, dict) and artifact.get("name") == BUILD_PROOF_ARTIFACT_NAME
+    ]
+    if not named:
+        return None
+    if len(named) != 1:
+        raise ValueError("BUILD_PROOF_ARTIFACT_NOT_UNIQUE")
+
+    artifact = named[0]
+    _positive_integer(artifact.get("id"), "BUILD_PROOF_ARTIFACT_ID_INVALID")
+    _positive_integer(artifact.get("size_in_bytes"), "BUILD_PROOF_ARTIFACT_SIZE_INVALID")
+    if artifact.get("expired") is not False:
+        raise ValueError("BUILD_PROOF_ARTIFACT_EXPIRED_OR_UNVERIFIED")
+    digest = artifact.get("digest")
+    if not isinstance(digest, str) or ARTIFACT_DIGEST.fullmatch(digest) is None:
+        raise ValueError("BUILD_PROOF_ARTIFACT_DIGEST_INVALID")
+
+    workflow_run = artifact.get("workflow_run")
+    if not isinstance(workflow_run, dict):
+        raise ValueError("BUILD_PROOF_ARTIFACT_RUN_MISSING")
+    if workflow_run.get("id") != expected_run_id:
+        raise ValueError("BUILD_PROOF_ARTIFACT_RUN_MISMATCH")
+    if workflow_run.get("head_sha") != expected_head:
+        raise ValueError("BUILD_PROOF_ARTIFACT_HEAD_MISMATCH")
+    if workflow_run.get("repository_id") != expected_repository_id:
+        raise ValueError("BUILD_PROOF_ARTIFACT_REPOSITORY_MISMATCH")
+    if workflow_run.get("head_repository_id") != expected_repository_id:
+        raise ValueError("BUILD_PROOF_ARTIFACT_HEAD_REPOSITORY_MISMATCH")
+    return artifact
+

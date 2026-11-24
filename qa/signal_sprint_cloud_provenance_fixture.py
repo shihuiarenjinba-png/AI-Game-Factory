@@ -742,6 +742,93 @@ def assert_build_run_discovery_fixture(results):
         lambda: select([older], expected, repo=""),
     ))
 
+    select_artifact = module.select_exact_head_build_artifact
+    repo_id = 1434022838
+
+    def proof_artifact(artifact_id=9001, run_updates=None, **updates):
+        run = {
+            "id": 1002,
+            "head_sha": expected,
+            "repository_id": repo_id,
+            "head_repository_id": repo_id,
+        }
+        if run_updates:
+            run.update(run_updates)
+        value = {
+            "id": artifact_id,
+            "name": module.BUILD_PROOF_ARTIFACT_NAME,
+            "expired": False,
+            "size_in_bytes": 2159,
+            "digest": "sha256:" + "d" * 64,
+            "workflow_run": run,
+        }
+        value.update(updates)
+        return value
+
+    exact_artifact = proof_artifact()
+    selected_artifact = select_artifact(
+        [{"name": "unrelated-artifact"}, exact_artifact],
+        1002,
+        expected,
+        repo_id,
+    )
+    assert selected_artifact is exact_artifact, "BUILD_PROOF_ARTIFACT_EXACT_ID_SELECTION_MISMATCH"
+    assert module.BUILD_PROOF_ARTIFACT_NAME == "signal-sprint-independent-cloud-build-proof"
+    results.append({
+        "case": "proof artifact selector binds exact run, head, repository, ID, digest and non-expired state",
+        "result": "PASS_SYNTHETIC",
+    })
+
+    assert select_artifact([proof_artifact(name="other")], 1002, expected, repo_id) is None
+    results.append({
+        "case": "proof artifact selector returns not-visible only when exact artifact name is absent",
+        "result": "PASS_SYNTHETIC",
+    })
+
+    helper_source = pathlib.Path("qa/signal_sprint_completed_build_discovery.py").read_text(encoding="utf-8")
+    for token in (
+        "BUILD_PROOF_ARTIFACT_NAME",
+        "BUILD_PROOF_ARTIFACT_NOT_UNIQUE",
+        "BUILD_PROOF_ARTIFACT_EXPIRED_OR_UNVERIFIED",
+        "BUILD_PROOF_ARTIFACT_DIGEST_INVALID",
+        "BUILD_PROOF_ARTIFACT_RUN_MISMATCH",
+        "BUILD_PROOF_ARTIFACT_HEAD_MISMATCH",
+        "BUILD_PROOF_ARTIFACT_REPOSITORY_MISMATCH",
+        "BUILD_PROOF_ARTIFACT_HEAD_REPOSITORY_MISMATCH",
+    ):
+        assert token in helper_source, "BUILD_PROOF_ARTIFACT_GUARD_MISSING:" + token
+    results.append({"case": "artifact selector source contains fail-closed run, head, repository and digest guards", "result": "PASS_STATIC_ONLY"})
+    for label, candidate, run_id, head, repository_id in (
+        ("expired artifact", proof_artifact(expired=True), 1002, expected, repo_id),
+        ("malformed digest", proof_artifact(digest="sha256:bad"), 1002, expected, repo_id),
+        ("wrong run ID", proof_artifact(run_updates={"id": 1001}), 1002, expected, repo_id),
+        ("wrong workflow head", proof_artifact(run_updates={"head_sha": "b" * 40}), 1002, expected, repo_id),
+        ("wrong repository ID", proof_artifact(run_updates={"repository_id": 7}), 1002, expected, repo_id),
+        ("fork head repository ID", proof_artifact(run_updates={"head_repository_id": 7}), 1002, expected, repo_id),
+        ("invalid artifact ID", proof_artifact(artifact_id=True), 1002, expected, repo_id),
+        ("invalid artifact size", proof_artifact(size_in_bytes=0), 1002, expected, repo_id),
+    ):
+        results.append(negative(
+            "proof artifact discovery rejects " + label,
+            lambda c=candidate, r=run_id, h=head, p=repository_id: select_artifact([c], r, h, p),
+        ))
+    results.append(negative(
+        "proof artifact discovery rejects duplicate exact-name artifacts",
+        lambda: select_artifact([exact_artifact, proof_artifact(9002)], 1002, expected, repo_id),
+    ))
+    results.append(negative(
+        "proof artifact discovery rejects invalid expected run ID",
+        lambda: select_artifact([exact_artifact], True, expected, repo_id),
+    ))
+    results.append(negative(
+        "proof artifact discovery rejects invalid expected repository ID",
+        lambda: select_artifact([exact_artifact], 1002, expected, True),
+    ))
+    results.append(negative(
+        "proof artifact discovery rejects malformed artifact collection",
+        lambda: select_artifact({"artifacts": [exact_artifact]}, 1002, expected, repo_id),
+    ))
+
 
 def run_checks(results):
     exe = b"synthetic-fixture-only-not-a-shipping-executable"
@@ -836,7 +923,20 @@ def run_checks(results):
         "pinned build workflow ID": "/actions/workflows/427222317/runs",
         "exact-head selector helper import": "signal_sprint_completed_build_discovery",
         "build run completion check": 'latest_status == "completed"',
-        "completed build receipt artifact": "signal-sprint-independent-cloud-build-proof",
+        "proof artifact selector": "select_exact_head_build_artifact",
+        "proof artifact API endpoint": "actions/runs/{run_id}/artifacts",
+        "proof artifact retry loop": "for attempt in range(30):",
+        "proof artifact retry delay": "time.sleep(2)",
+        "proof artifact not-visible HOLD": "HOLD_BUILD_PROOF_ARTIFACT_NOT_VISIBLE",
+        "proof artifact selected status": "PASS_EXACT_RUN_BUILD_PROOF_ARTIFACT_SELECTED",
+        "proof artifact metadata failure": "FAIL_BUILD_PROOF_ARTIFACT_METADATA_INVALID",
+        "proof artifact discovery receipt": "build-proof-artifact-discovery.json",
+        "proof artifact exact ID download": "artifact-ids: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}",
+        "proof artifact ID receipt binding": "build_proof_artifact_id",
+        "proof artifact digest receipt binding": "build_proof_artifact_digest",
+        "proof artifact run receipt binding": "build_proof_artifact_run_id",
+        "proof artifact head receipt binding": "build_proof_artifact_workflow_head_sha",
+        "build repository ID binding": "build_repository_id",
         "exact build EXE artifact ID": "artifact-ids: ${{ steps.receipt.outputs.artifact_id }}",
         "single artifact flattened to exact EXE path": "merge-multiple: true",
         "same run artifact download": "run-id: ${{ steps.discover.outputs.build_run_id }}",
@@ -855,6 +955,7 @@ def run_checks(results):
     def assert_completed_job_contract(candidate):
         for label, token in completed_job_contract.items():
             assert token in candidate, "COMPLETED_BUILD_ATTESTATION_CONTRACT_MISSING:" + label
+        assert "name: signal-sprint-independent-cloud-build-proof" not in candidate, "BUILD_PROOF_ARTIFACT_MUST_DOWNLOAD_BY_EXACT_ID"
         assert "self-hosted" not in candidate and "signal-sprint-gdk" not in candidate, "CLOUD_ATTESTATION_MUST_NOT_ALLOCATE_PHYSICAL_GDK_RUNNER"
     for label, token in completed_job_contract.items():
         changed = completed_job.replace(token, "REMOVED_BY_MUTATION_TEST")
@@ -864,6 +965,9 @@ def run_checks(results):
     results.append(negative(
         "completed build attestation cannot use the physical GDK runner",
         lambda: assert_completed_job_contract(completed_job + "\n    runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]")))
+    results.append(negative(
+        "completed build attestation rejects name-only proof artifact download",
+        lambda: assert_completed_job_contract(completed_job + "\n          name: signal-sprint-independent-cloud-build-proof")))
     results.append(negative(
         "physical UIA strict completion flag mutation reject",
         lambda: assert_uia_completed_build_contract(uia_verify_command.replace("--require-completed-run", ""))))
@@ -1129,7 +1233,7 @@ def main():
             "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
             "build_run_discovery_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_completed_build_discovery.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v5",
+            "schema": "signal-sprint-cloud-fixture-v6",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",

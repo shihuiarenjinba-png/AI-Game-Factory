@@ -140,6 +140,8 @@ jobs:
       build_artifact_id: ${{ steps.publish.outputs.build_artifact_id }}
       build_exe_sha256: ${{ steps.publish.outputs.build_exe_sha256 }}
       build_workflow_head_sha: ${{ steps.publish.outputs.build_workflow_head_sha }}
+      build_proof_artifact_id: ${{ steps.publish.outputs.build_proof_artifact_id }}
+      build_proof_artifact_digest: ${{ steps.publish.outputs.build_proof_artifact_digest }}
     if: >-
       (github.event_name == 'push' ||
        (github.event_name == 'workflow_dispatch' && inputs.expected_head == github.sha)) &&
@@ -241,11 +243,16 @@ jobs:
                               with open(output, "a", encoding="utf-8") as handle:
                                   handle.write(f"build_run_id={latest_run_id}\n")
                               raise SystemExit("BUILD_RUN_COMPLETED_NOT_SUCCESS")
+                          repository = run.get("repository")
+                          repository_id = repository.get("id") if isinstance(repository, dict) else None
+                          if type(repository_id) is not int or repository_id <= 0:
+                              raise SystemExit("BUILD_RUN_REPOSITORY_ID_INVALID")
                           discovery = {
                               "schema": "signal-sprint-build-run-discovery-v1",
                               "status": "PASS_COMPLETED_BUILD_RUN_DISCOVERED",
                               "workflow_head_sha": expected_head,
                               "build_run_id": latest_run_id,
+                              "repository_id": repository_id,
                               "run_status": latest_status,
                               "run_conclusion": run.get("conclusion"),
                               "run_attempt": run.get("run_attempt"),
@@ -256,6 +263,7 @@ jobs:
                           )
                           with open(output, "a", encoding="utf-8") as handle:
                               handle.write(f"build_run_id={latest_run_id}\n")
+                              handle.write(f"build_repository_id={repository_id}\n")
                           break
               except SystemExit:
                   raise
@@ -295,17 +303,122 @@ jobs:
                   handle.write("build_run_id=\n")
               print(hold_status)
           PY
-      - name: Download independent build receipt from the exact run
+      - name: Discover exact-run build proof Artifact ID with bounded retry
+        id: discover_proof_artifact
+        if: steps.discover.outcome == 'success' && steps.discover.outputs.build_run_id != '' && steps.discover.outputs.build_repository_id != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_REPOSITORY_ID: ${{ steps.discover.outputs.build_repository_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+          from qa.signal_sprint_completed_build_discovery import select_exact_head_build_artifact
+
+          repo = "shihuiarenjinba-png/AI-Game-Factory"
+          run_id = os.environ.get("EXPECTED_BUILD_RUN_ID", "")
+          repository_id = os.environ.get("EXPECTED_REPOSITORY_ID", "")
+          expected_head = os.environ.get("EXPECTED_HEAD", "")
+          token = os.environ.get("GITHUB_TOKEN", "")
+          output = os.environ["GITHUB_OUTPUT"]
+          evidence_path = Path("evidence/build-proof-artifact-discovery.json")
+
+          if not re.fullmatch(r"[1-9][0-9]*", run_id):
+              raise SystemExit("EXPECTED_BUILD_RUN_ID_INVALID")
+          if not re.fullmatch(r"[1-9][0-9]*", repository_id):
+              raise SystemExit("EXPECTED_REPOSITORY_ID_INVALID")
+          if not re.fullmatch(r"[a-f0-9]{40}", expected_head):
+              raise SystemExit("EXPECTED_HEAD_INVALID")
+          if not token:
+              raise SystemExit("GITHUB_TOKEN_MISSING")
+
+          def emit(status, artifact=None, reason=None):
+              record = {
+                  "schema": "signal-sprint-build-proof-artifact-discovery-v1",
+                  "status": status,
+                  "build_run_id": int(run_id),
+                  "repository_id": int(repository_id),
+                  "workflow_head_sha": expected_head,
+                  "artifact_id": artifact.get("id") if artifact else None,
+                  "artifact_name": artifact.get("name") if artifact else None,
+                  "artifact_size_bytes": artifact.get("size_in_bytes") if artifact else None,
+                  "artifact_digest": artifact.get("digest") if artifact else None,
+                  "failure_reason": reason,
+                  "physical_gui_verified": False,
+                  "gdk_package_verified": False,
+              }
+              evidence_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+              with open(output, "a", encoding="utf-8") as handle:
+                  handle.write("proof_artifact_id=" + (str(artifact["id"]) if artifact else "") + "\n")
+                  handle.write("proof_artifact_digest=" + (str(artifact["digest"]) if artifact else "") + "\n")
+              print(status)
+
+          api = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts"
+          last_error = None
+          for attempt in range(30):
+              query = urllib.parse.urlencode({"per_page": 100})
+              request = urllib.request.Request(
+                  api + "?" + query,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "signal-sprint-proof-artifact-discovery",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      payload = json.loads(response.read(2 * 1024 * 1024 + 1))
+                  artifacts = payload.get("artifacts")
+                  if not isinstance(artifacts, list):
+                      raise ValueError("WORKFLOW_ARTIFACTS_INVALID")
+                  try:
+                      artifact = select_exact_head_build_artifact(
+                          artifacts, int(run_id), expected_head, int(repository_id)
+                      )
+                  except ValueError as exc:
+                      emit("FAIL_BUILD_PROOF_ARTIFACT_METADATA_INVALID", reason=str(exc)[:180])
+                      raise SystemExit(str(exc))
+                  if artifact is not None:
+                      emit("PASS_EXACT_RUN_BUILD_PROOF_ARTIFACT_SELECTED", artifact=artifact)
+                      break
+                  last_error = "BUILD_PROOF_ARTIFACT_NOT_VISIBLE"
+              except SystemExit:
+                  raise
+              except Exception as exc:
+                  last_error = type(exc).__name__ + ":" + str(exc)[:180]
+              if attempt < 29:
+                  time.sleep(2)
+          else:
+              status = (
+                  "HOLD_BUILD_PROOF_ARTIFACT_NOT_VISIBLE"
+                  if last_error == "BUILD_PROOF_ARTIFACT_NOT_VISIBLE"
+                  else "HOLD_ACTIONS_API_UNAVAILABLE"
+              )
+              emit(status, reason=last_error or "ARTIFACT_DISCOVERY_TIMEOUT")
+          PY
+      - name: Download independent build receipt by exact Artifact ID from the exact run
         id: download_proof
-        if: steps.discover.outputs.build_run_id != ''
+        if: steps.discover_proof_artifact.outputs.proof_artifact_id != ''
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: signal-sprint-independent-cloud-build-proof
+          artifact-ids: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
           path: evidence/build-proof
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.discover.outputs.build_run_id }}
+
       - name: Validate receipt run and workflow head; expose exact EXE artifact ID
         id: receipt
         if: steps.download_proof.outcome == 'success'
@@ -383,6 +496,11 @@ jobs:
         id: publish
         if: always()
         shell: bash
+        env:
+          PROOF_ARTIFACT_ID: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
+          PROOF_ARTIFACT_DIGEST: ${{ steps.discover_proof_artifact.outputs.proof_artifact_digest }}
+          PROOF_ARTIFACT_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          PROOF_ARTIFACT_WORKFLOW_HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -404,8 +522,25 @@ jobs:
               status = "HOLD_ATTESTATION_RECEIPT_MISSING"
 
           if status == "PASS_INDEPENDENT_BUILD_ONLY":
+              proof_artifact_id = os.environ.get("PROOF_ARTIFACT_ID", "")
+              proof_artifact_digest = os.environ.get("PROOF_ARTIFACT_DIGEST", "")
+              proof_artifact_run_id = os.environ.get("PROOF_ARTIFACT_RUN_ID", "")
+              proof_artifact_head = os.environ.get("PROOF_ARTIFACT_WORKFLOW_HEAD_SHA", "")
+              if (
+                  not re.fullmatch(r"[1-9][0-9]*", proof_artifact_id)
+                  or not re.fullmatch(r"sha256:[0-9a-f]{64}", proof_artifact_digest)
+                  or not re.fullmatch(r"[1-9][0-9]*", proof_artifact_run_id)
+                  or not re.fullmatch(r"[a-f0-9]{40}", proof_artifact_head)
+              ):
+                  status = "HOLD_BUILD_PROOF_ARTIFACT_BINDING_MISSING"
+              else:
+                  receipt["build_proof_artifact_id"] = int(proof_artifact_id)
+                  receipt["build_proof_artifact_digest"] = proof_artifact_digest
+                  receipt["build_proof_artifact_run_id"] = int(proof_artifact_run_id)
+                  receipt["build_proof_artifact_workflow_head_sha"] = proof_artifact_head
               valid = (
-                  receipt.get("completed_run_required") is True
+                  status == "PASS_INDEPENDENT_BUILD_ONLY"
+                  and receipt.get("completed_run_required") is True
                   and receipt.get("run_status_at_verification") == "completed"
                   and receipt.get("run_conclusion") == "success"
                   and receipt.get("independent_build_verified") is True
@@ -417,15 +552,23 @@ jobs:
                   and type(receipt.get("artifact_id")) is int and receipt["artifact_id"] > 0
                   and isinstance(receipt.get("exe_sha256"), str)
                   and bool(re.fullmatch(r"[0-9a-f]{64}", receipt["exe_sha256"]))
+                  and type(receipt.get("build_proof_artifact_id")) is int and receipt["build_proof_artifact_id"] > 0
+                  and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt.get("build_proof_artifact_digest") or "")))
+                  and receipt.get("build_proof_artifact_run_id") == receipt.get("run_id")
+                  and receipt.get("build_proof_artifact_workflow_head_sha") == receipt.get("workflow_head_sha")
               )
               if not valid:
-                  status = "HOLD_COMPLETED_BUILD_ATTESTATION_FIELDS_INVALID"
+                  if status == "PASS_INDEPENDENT_BUILD_ONLY":
+                      status = "HOLD_COMPLETED_BUILD_ATTESTATION_FIELDS_INVALID"
               else:
+                  path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
                   outputs = {
                       "build_run_id": str(receipt["run_id"]),
                       "build_artifact_id": str(receipt["artifact_id"]),
                       "build_exe_sha256": receipt["exe_sha256"],
                       "build_workflow_head_sha": receipt["workflow_head_sha"],
+                      "build_proof_artifact_id": str(receipt["build_proof_artifact_id"]),
+                      "build_proof_artifact_digest": receipt["build_proof_artifact_digest"],
                   }
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
@@ -443,7 +586,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
       - name: Fail closed on a completed-run or provenance mismatch
-        if: always() && (steps.discover.outcome == 'failure' || (steps.discover.outputs.build_run_id != '' && steps.verify.outcome != 'success'))
+        if: always() && (steps.discover.outcome == 'failure' || steps.discover_proof_artifact.outcome == 'failure' || (steps.discover.outputs.build_run_id != '' && steps.verify.outcome != 'success'))
         shell: bash
         run: |
           echo 'COMPLETED_BUILD_ATTESTATION_FAILED'
