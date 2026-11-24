@@ -295,6 +295,18 @@ class GdkPackageReadinessTests(unittest.TestCase):
                 self.assertEqual(result["status"], "HOLD_GDK_SDK_CAPABILITY_PROOF_MISMATCH")
                 self.assertFalse(result["receipt_verified"])
 
+    def test_submission_validator_version_must_match_approved_sdk_version(self):
+        probe = good_sdk_capability()
+        probe["submission_validator"]["effective_version"] = "10.0.26100.2"
+        result = validate_sdk_capability(probe)
+        self.assertEqual(result["status"], "HOLD_GDK_SDK_CAPABILITY_PROOF_MISMATCH")
+        self.assertIn(
+            "SDK_CAPABILITY_SUBMISSION_VALIDATOR_VERSION_MISMATCH",
+            result["errors"],
+        )
+        self.assertFalse(result["receipt_verified"])
+        self.assertFalse(result["toolchain_capability_verified"])
+
     def test_sdk_capability_cannot_claim_side_effects(self):
         for field in (
             "makepkg_executed", "submission_validator_executed",
