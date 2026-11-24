@@ -10,6 +10,8 @@ on:
       - 'qa/signal_sprint_uia_dynamic_gate.ps1'
       - 'qa/signal_sprint_independent_build_verify.py'
       - 'qa/signal_sprint_gdk_package_readiness.py'
+      - 'qa/signal_sprint_gdk_current_source_intake.py'
+      - 'products/signal-sprint/tests/test_gdk_current_source_intake.py'
       - 'products/signal-sprint/tests/test_gdk_package_readiness.py'
       - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
       - 'products/signal-sprint/tests/test_gdk_sdk_capability_probe.py'
@@ -53,6 +55,11 @@ jobs:
         run: |
           python products/signal-sprint/tests/test_gdk_sdk_capability_probe.py -v
           if ($LASTEXITCODE -ne 0) { throw 'GDK_SDK_CAPABILITY_TESTS_FAILED' }
+      - name: Test current-source GDK intake contract
+        shell: pwsh
+        run: |
+          python products/signal-sprint/tests/test_gdk_current_source_intake.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'CURRENT_SOURCE_GDK_INTAKE_TESTS_FAILED' }
       - name: Probe installed Windows GDK SDK and MakePkg without executing tools
         shell: pwsh
         env:

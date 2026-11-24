@@ -1,10 +1,11 @@
-"""Read-only Signal Sprint GDK package-readiness receipt.
+"""LEGACY forensic audit for the historical PR53/c058 GDK contract.
 
-This check correlates the current QA build with the older, source-pinned GDK
-contract. It parses the exact Provisioner PR53 source as data; it never imports
-or executes Provisioner code. It never authorizes or performs CAS, SDK, MakePkg,
-signing, MSIXVC, ordinary MSIX, Store, or central-ledger operations. A
-successful CI job means only that this HOLD receipt was generated.
+Do not use this module to generate current Signal Sprint readiness. Its pinned
+Identity/request and EXE digests belong to the old c058 source lineage only.
+The active workflow uses signal_sprint_gdk_current_source_intake.py, which
+requires an exact live Factory ref before deriving a current-source DRY_RUN
+request. No CAS, SDK, MakePkg, signing, MSIXVC, ordinary MSIX, Store, or
+central-ledger operation is authorized here.
 """
 from __future__ import annotations
 
