@@ -6,6 +6,7 @@ on:
       - '.github/workflows/signal-sprint-cloud-build-proof.yml'
       - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_completed_build_discovery.py'
       - 'qa/signal_sprint_uia_dynamic_gate.ps1'
       - 'qa/signal_sprint_independent_build_verify.py'
       - 'qa/signal_sprint_gdk_package_readiness.py'
