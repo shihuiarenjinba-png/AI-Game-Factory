@@ -478,6 +478,11 @@ jobs:
       needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' &&
       needs.cloud-revision-hold.outputs.revision_included == 'true'
     runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
+    env:
+      ATTESTED_BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      ATTESTED_BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      ATTESTED_BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      ATTESTED_BUILD_WORKFLOW_HEAD_SHA: ${{ needs.completed-build-attestation.outputs.build_workflow_head_sha }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -565,6 +570,854 @@ jobs:
           if ($null -eq $receipt.artifact_id) { throw 'BUILD_ARTIFACT_ID_INVALID' }
           try { $buildArtifactId = [long]$receipt.artifact_id } catch { throw 'BUILD_ARTIFACT_ID_INVALID' }
           if ($buildArtifactId -le 0) { throw 'BUILD_ARTIFACT_ID_INVALID' }
+          $attestedRunIdText = [string]$env:ATTESTED_BUILD_RUN_ID
+          $attestedArtifactIdText = [string]$env:ATTESTED_BUILD_ARTIFACT_ID
+          $attestedExeSha = [string]$env:ATTESTED_BUILD_EXE_SHA256
+          $attestedWorkflowHead = [string]$env:ATTESTED_BUILD_WORKFLOW_HEAD_SHA
+          if ($attestedRunIdText -cnotmatch '^[1-9][0-9]*          if ($exeSize -le 0) { throw 'EXE_SIZE_INVALID' }
+          [pscustomobject]@{
+            workflow_head=$head
+            product_source=$productSource
+            pr30_source=$pr30
+            exe_sha256=$actual
+            exe_size_bytes=$exeSize
+            build_receipt_sha256=$receiptFileSha
+            attested_build_run_id=$attestedRunId
+            attested_build_artifact_id=$attestedArtifactId
+            attested_build_exe_sha256=$attestedExeSha.ToLowerInvariant()
+            attested_build_workflow_head_sha=$attestedWorkflowHead
+            build_run_url=$receipt.build_run_url
+            build_run_id=$buildRunId
+            build_artifact_id=$buildArtifactId
+            build_workflow_head_sha=$receipt.workflow_head_sha
+            provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'
+            gui='NOT_YET_TESTED'
+          } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Verify actual GitHub build run artifact and EXE bytes
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXE_PATH: ${{ inputs.exe_path }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+          EXPECTED_BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+          EXPECTED_BUILD_WORKFLOW_HEAD_SHA: ${{ needs.completed-build-attestation.outputs.build_workflow_head_sha }}
+        run: |
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json --require-completed-run --expected-run-id "$env:EXPECTED_BUILD_RUN_ID" --expected-workflow-head "$env:EXPECTED_BUILD_WORKFLOW_HEAD_SHA"
+          if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Bind measured UIA EXE hash to preflight receipt
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $preflight = Get-Content -LiteralPath evidence/preflight-receipt.json -Raw | ConvertFrom-Json
+          $uia = Get-Content -LiteralPath evidence/uia-receipt.json -Raw | ConvertFrom-Json
+          if ($preflight.provenance -cne 'RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED') { throw 'PREFLIGHT_PROVENANCE_UNEXPECTED' }
+          $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
+          if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
+          if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
+          if ([string]$build.workflow_head_sha -cne [string]$preflight.build_workflow_head_sha -or [string]$build.workflow_head_sha -cne [string]$preflight.workflow_head) { throw 'INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH' }
+          if ([long]$build.run_id -ne [long]$preflight.build_run_id -or [long]$build.artifact_id -ne [long]$preflight.build_artifact_id) { throw 'INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH' }
+          if ([string]$build.build_run_url -cne [string]$preflight.build_run_url) { throw 'INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH' }
+          if ([long]$build.exe_size_bytes -ne [long]$preflight.exe_size_bytes -or [long]$build.artifact_exe_size_bytes -ne [long]$preflight.exe_size_bytes) { throw 'INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH' }
+          if ([string]$build.artifact_zip_sha256 -cnotmatch '^[a-f0-9]{64}$' -or [long]$build.artifact_zip_size_bytes -le 0) { throw 'INDEPENDENT_BUILD_ARTIFACT_DIGEST_INVALID' }
+          if ($build.pr30_source_commit -cne $preflight.pr30_source) { throw 'INDEPENDENT_BUILD_PR30_BINDING_MISMATCH' }
+          if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
+          if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
+          if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
+          foreach ($lang in @('EN','JP')) {
+            $cases = @($uia.evidence | Where-Object { $_.language -ceq $lang })
+            if ($cases.Count -ne 5 -or @($cases | Where-Object { $_.side_effect_verified -ne $true }).Count -gt 0) {
+              throw "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:$lang"
+            }
+            $expectedNames = if ($lang -ceq 'EN') {
+              @('Start / Retry (R)','Undo (U)','Save (Ctrl+S)','Load (L)','日本語 (J)')
+            } else {
+              @('開始 / 再挑戦 (R)','1手戻す (U)','保存 (Ctrl+S)','読込 (L)','English (J)')
+            }
+            $actualNames = @($cases | ForEach-Object { [string]$_.name })
+            if ((@($actualNames | Select-Object -Unique).Count -ne 5) -or
+                ((@($actualNames | Sort-Object) -join [char]0) -cne (@($expectedNames | Sort-Object) -join [char]0))) {
+              throw "UIA_BUTTON_EXACT_SET_OR_DUPLICATE:$lang"
+            }
+            $lostToken = if ($lang -ceq 'EN') { 'ControlType.Text:LOST' } else { 'ControlType.Text:失敗' }
+            $lostCases = @($cases | Where-Object {
+              @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
+            })
+            if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
+            $loadName = if ($lang -ceq 'EN') { 'Load (L)' } else { '読込 (L)' }
+            $loadCases = @($cases | Where-Object { $_.name -ceq $loadName })
+            if ($loadCases.Count -ne 1) { throw "UIA_LOAD_CASE_NOT_UNIQUE:$lang" }
+            $loadLostNodes = @($loadCases[0].lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken })
+            if ($loadLostNodes.Count -eq 0) { throw "UIA_LOAD_LOST_STATE_NOT_OBSERVED:$lang" }
+            $startName = if ($lang -ceq 'EN') { 'Start / Retry (R)' } else { '開始 / 再挑戦 (R)' }
+            $startCases = @($cases | Where-Object { $_.name -ceq $startName })
+            if ($startCases.Count -ne 1) { throw "UIA_START_CASE_NOT_UNIQUE:$lang" }
+            $startLostBefore = @($startCases[0].uia_before | Where-Object { [string]$_ -ceq $lostToken })
+            $playingToken = if ($lang -ceq 'EN') { 'ControlType.Text:PLAYING' } else { 'ControlType.Text:プレイ中' }
+            $startPlayingAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $playingToken })
+            $startLostAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $lostToken })
+            if ($startLostBefore.Count -eq 0) { throw "UIA_START_LOST_PRECONDITION_NOT_OBSERVED:$lang" }
+            if ($startPlayingAfter.Count -eq 0 -or $startLostAfter.Count -gt 0) {
+              throw "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:$lang"
+            }
+          }
+          # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
+          # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $preflight.product_source
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-revision-binding-v1'
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'FAIL_REVISION_NOT_IN_PRODUCT_SOURCE' })
+            required_revision=$requiredRevision
+            product_source=$preflight.product_source
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+            product_acceptance=$revisionIncluded
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/revision-binding.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'REVISION_NOT_IN_PRODUCT_SOURCE' }
+          [pscustomobject]@{
+            schema='signal-sprint-uia-hash-binding-v2'
+            status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
+            attested_build_run_id=$preflight.attested_build_run_id
+            attested_build_artifact_id=$preflight.attested_build_artifact_id
+            attested_build_exe_sha256=$preflight.attested_build_exe_sha256
+            attested_build_workflow_head_sha=$preflight.attested_build_workflow_head_sha
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            exe_size_bytes=$build.exe_size_bytes
+            artifact_exe_size_bytes=$build.artifact_exe_size_bytes
+            artifact_zip_sha256=$build.artifact_zip_sha256
+            artifact_zip_size_bytes=$build.artifact_zip_size_bytes
+            build_run_url=$build.build_run_url
+            build_receipt_sha256=$preflight.build_receipt_sha256
+            product_source=$preflight.product_source
+            workflow_head=$preflight.workflow_head
+            independent_build_verified=$true
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  gdk-package-readiness:
+    if: always()
+    needs: [cloud-provenance-fixture, completed-build-attestation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      INDEPENDENT_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      PRODUCT_SOURCE_SHA: 1a349faa41663c417c40710140a4d50c79b62b78
+      PR30_SOURCE_SHA: a377043d3c9ab0c71d9a100cdb841dd7000313b9
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact UIA workflow head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact Provisioner PR53 contract as data only
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: provisioner
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download completed-build attestation from this exact UIA run
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/attestation
+      - name: Download read-only GDK SDK capability receipt from the exact completed build run
+        if: always() && env.BUILD_RUN_ID != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/sdk-capability
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.BUILD_RUN_ID }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run GDK package-readiness contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
+      - name: Generate GDK readiness only from completed-build attestation
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
+            --provisioner-checkout provisioner \
+            --factory-checkout factory \
+            --completed-build-attestation evidence/attestation/completed-build-attestation.json \
+            --sdk-capability-receipt evidence/sdk-capability/gdk-sdk-capability.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload completed-run GDK package-readiness receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
+          if-no-files-found: error
+          retention-days: 30
+) { throw 'ATTESTED_BUILD_RUN_ID_INVALID' }
+          if ($attestedArtifactIdText -cnotmatch '^[1-9][0-9]*          if ($exeSize -le 0) { throw 'EXE_SIZE_INVALID' }
+          [pscustomobject]@{
+            workflow_head=$head
+            product_source=$productSource
+            pr30_source=$pr30
+            exe_sha256=$actual
+            exe_size_bytes=$exeSize
+            build_receipt_sha256=$receiptFileSha
+            build_run_url=$receipt.build_run_url
+            build_run_id=$buildRunId
+            build_artifact_id=$buildArtifactId
+            build_workflow_head_sha=$receipt.workflow_head_sha
+            provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'
+            gui='NOT_YET_TESTED'
+          } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Verify actual GitHub build run artifact and EXE bytes
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXE_PATH: ${{ inputs.exe_path }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+        run: |
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json --require-completed-run
+          if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Bind measured UIA EXE hash to preflight receipt
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $preflight = Get-Content -LiteralPath evidence/preflight-receipt.json -Raw | ConvertFrom-Json
+          $uia = Get-Content -LiteralPath evidence/uia-receipt.json -Raw | ConvertFrom-Json
+          if ($preflight.provenance -cne 'RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED') { throw 'PREFLIGHT_PROVENANCE_UNEXPECTED' }
+          $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
+          if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
+          if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
+          if ([string]$build.workflow_head_sha -cne [string]$preflight.build_workflow_head_sha -or [string]$build.workflow_head_sha -cne [string]$preflight.workflow_head) { throw 'INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH' }
+          if ([long]$build.run_id -ne [long]$preflight.build_run_id -or [long]$build.artifact_id -ne [long]$preflight.build_artifact_id) { throw 'INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH' }
+          if ([string]$build.build_run_url -cne [string]$preflight.build_run_url) { throw 'INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH' }
+          if ([long]$build.exe_size_bytes -ne [long]$preflight.exe_size_bytes -or [long]$build.artifact_exe_size_bytes -ne [long]$preflight.exe_size_bytes) { throw 'INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH' }
+          if ([string]$build.artifact_zip_sha256 -cnotmatch '^[a-f0-9]{64}$' -or [long]$build.artifact_zip_size_bytes -le 0) { throw 'INDEPENDENT_BUILD_ARTIFACT_DIGEST_INVALID' }
+          if ($build.pr30_source_commit -cne $preflight.pr30_source) { throw 'INDEPENDENT_BUILD_PR30_BINDING_MISMATCH' }
+          if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
+          if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
+          if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
+          foreach ($lang in @('EN','JP')) {
+            $cases = @($uia.evidence | Where-Object { $_.language -ceq $lang })
+            if ($cases.Count -ne 5 -or @($cases | Where-Object { $_.side_effect_verified -ne $true }).Count -gt 0) {
+              throw "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:$lang"
+            }
+            $expectedNames = if ($lang -ceq 'EN') {
+              @('Start / Retry (R)','Undo (U)','Save (Ctrl+S)','Load (L)','日本語 (J)')
+            } else {
+              @('開始 / 再挑戦 (R)','1手戻す (U)','保存 (Ctrl+S)','読込 (L)','English (J)')
+            }
+            $actualNames = @($cases | ForEach-Object { [string]$_.name })
+            if ((@($actualNames | Select-Object -Unique).Count -ne 5) -or
+                ((@($actualNames | Sort-Object) -join [char]0) -cne (@($expectedNames | Sort-Object) -join [char]0))) {
+              throw "UIA_BUTTON_EXACT_SET_OR_DUPLICATE:$lang"
+            }
+            $lostToken = if ($lang -ceq 'EN') { 'ControlType.Text:LOST' } else { 'ControlType.Text:失敗' }
+            $lostCases = @($cases | Where-Object {
+              @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
+            })
+            if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
+            $loadName = if ($lang -ceq 'EN') { 'Load (L)' } else { '読込 (L)' }
+            $loadCases = @($cases | Where-Object { $_.name -ceq $loadName })
+            if ($loadCases.Count -ne 1) { throw "UIA_LOAD_CASE_NOT_UNIQUE:$lang" }
+            $loadLostNodes = @($loadCases[0].lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken })
+            if ($loadLostNodes.Count -eq 0) { throw "UIA_LOAD_LOST_STATE_NOT_OBSERVED:$lang" }
+            $startName = if ($lang -ceq 'EN') { 'Start / Retry (R)' } else { '開始 / 再挑戦 (R)' }
+            $startCases = @($cases | Where-Object { $_.name -ceq $startName })
+            if ($startCases.Count -ne 1) { throw "UIA_START_CASE_NOT_UNIQUE:$lang" }
+            $startLostBefore = @($startCases[0].uia_before | Where-Object { [string]$_ -ceq $lostToken })
+            $playingToken = if ($lang -ceq 'EN') { 'ControlType.Text:PLAYING' } else { 'ControlType.Text:プレイ中' }
+            $startPlayingAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $playingToken })
+            $startLostAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $lostToken })
+            if ($startLostBefore.Count -eq 0) { throw "UIA_START_LOST_PRECONDITION_NOT_OBSERVED:$lang" }
+            if ($startPlayingAfter.Count -eq 0 -or $startLostAfter.Count -gt 0) {
+              throw "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:$lang"
+            }
+          }
+          # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
+          # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $preflight.product_source
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-revision-binding-v1'
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'FAIL_REVISION_NOT_IN_PRODUCT_SOURCE' })
+            required_revision=$requiredRevision
+            product_source=$preflight.product_source
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+            product_acceptance=$revisionIncluded
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/revision-binding.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'REVISION_NOT_IN_PRODUCT_SOURCE' }
+          [pscustomobject]@{
+            schema='signal-sprint-uia-hash-binding-v1'
+            status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            exe_size_bytes=$build.exe_size_bytes
+            artifact_exe_size_bytes=$build.artifact_exe_size_bytes
+            artifact_zip_sha256=$build.artifact_zip_sha256
+            artifact_zip_size_bytes=$build.artifact_zip_size_bytes
+            build_run_url=$build.build_run_url
+            build_receipt_sha256=$preflight.build_receipt_sha256
+            product_source=$preflight.product_source
+            workflow_head=$preflight.workflow_head
+            independent_build_verified=$true
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  gdk-package-readiness:
+    if: always()
+    needs: [cloud-provenance-fixture, completed-build-attestation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      INDEPENDENT_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      PRODUCT_SOURCE_SHA: 1a349faa41663c417c40710140a4d50c79b62b78
+      PR30_SOURCE_SHA: a377043d3c9ab0c71d9a100cdb841dd7000313b9
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact UIA workflow head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact Provisioner PR53 contract as data only
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: provisioner
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download completed-build attestation from this exact UIA run
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/attestation
+      - name: Download read-only GDK SDK capability receipt from the exact completed build run
+        if: always() && env.BUILD_RUN_ID != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/sdk-capability
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.BUILD_RUN_ID }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run GDK package-readiness contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
+      - name: Generate GDK readiness only from completed-build attestation
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
+            --provisioner-checkout provisioner \
+            --factory-checkout factory \
+            --completed-build-attestation evidence/attestation/completed-build-attestation.json \
+            --sdk-capability-receipt evidence/sdk-capability/gdk-sdk-capability.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload completed-run GDK package-readiness receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
+          if-no-files-found: error
+          retention-days: 30
+) { throw 'ATTESTED_BUILD_ARTIFACT_ID_INVALID' }
+          if ($attestedExeSha -cnotmatch '^[a-f0-9]{64}          if ($exeSize -le 0) { throw 'EXE_SIZE_INVALID' }
+          [pscustomobject]@{
+            workflow_head=$head
+            product_source=$productSource
+            pr30_source=$pr30
+            exe_sha256=$actual
+            exe_size_bytes=$exeSize
+            build_receipt_sha256=$receiptFileSha
+            build_run_url=$receipt.build_run_url
+            build_run_id=$buildRunId
+            build_artifact_id=$buildArtifactId
+            build_workflow_head_sha=$receipt.workflow_head_sha
+            provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'
+            gui='NOT_YET_TESTED'
+          } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Verify actual GitHub build run artifact and EXE bytes
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXE_PATH: ${{ inputs.exe_path }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+        run: |
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json --require-completed-run
+          if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Bind measured UIA EXE hash to preflight receipt
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $preflight = Get-Content -LiteralPath evidence/preflight-receipt.json -Raw | ConvertFrom-Json
+          $uia = Get-Content -LiteralPath evidence/uia-receipt.json -Raw | ConvertFrom-Json
+          if ($preflight.provenance -cne 'RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED') { throw 'PREFLIGHT_PROVENANCE_UNEXPECTED' }
+          $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
+          if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
+          if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
+          if ([string]$build.workflow_head_sha -cne [string]$preflight.build_workflow_head_sha -or [string]$build.workflow_head_sha -cne [string]$preflight.workflow_head) { throw 'INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH' }
+          if ([long]$build.run_id -ne [long]$preflight.build_run_id -or [long]$build.artifact_id -ne [long]$preflight.build_artifact_id) { throw 'INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH' }
+          if ([string]$build.build_run_url -cne [string]$preflight.build_run_url) { throw 'INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH' }
+          if ([long]$build.exe_size_bytes -ne [long]$preflight.exe_size_bytes -or [long]$build.artifact_exe_size_bytes -ne [long]$preflight.exe_size_bytes) { throw 'INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH' }
+          if ([string]$build.artifact_zip_sha256 -cnotmatch '^[a-f0-9]{64}$' -or [long]$build.artifact_zip_size_bytes -le 0) { throw 'INDEPENDENT_BUILD_ARTIFACT_DIGEST_INVALID' }
+          if ($build.pr30_source_commit -cne $preflight.pr30_source) { throw 'INDEPENDENT_BUILD_PR30_BINDING_MISMATCH' }
+          if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
+          if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
+          if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
+          foreach ($lang in @('EN','JP')) {
+            $cases = @($uia.evidence | Where-Object { $_.language -ceq $lang })
+            if ($cases.Count -ne 5 -or @($cases | Where-Object { $_.side_effect_verified -ne $true }).Count -gt 0) {
+              throw "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:$lang"
+            }
+            $expectedNames = if ($lang -ceq 'EN') {
+              @('Start / Retry (R)','Undo (U)','Save (Ctrl+S)','Load (L)','日本語 (J)')
+            } else {
+              @('開始 / 再挑戦 (R)','1手戻す (U)','保存 (Ctrl+S)','読込 (L)','English (J)')
+            }
+            $actualNames = @($cases | ForEach-Object { [string]$_.name })
+            if ((@($actualNames | Select-Object -Unique).Count -ne 5) -or
+                ((@($actualNames | Sort-Object) -join [char]0) -cne (@($expectedNames | Sort-Object) -join [char]0))) {
+              throw "UIA_BUTTON_EXACT_SET_OR_DUPLICATE:$lang"
+            }
+            $lostToken = if ($lang -ceq 'EN') { 'ControlType.Text:LOST' } else { 'ControlType.Text:失敗' }
+            $lostCases = @($cases | Where-Object {
+              @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
+            })
+            if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
+            $loadName = if ($lang -ceq 'EN') { 'Load (L)' } else { '読込 (L)' }
+            $loadCases = @($cases | Where-Object { $_.name -ceq $loadName })
+            if ($loadCases.Count -ne 1) { throw "UIA_LOAD_CASE_NOT_UNIQUE:$lang" }
+            $loadLostNodes = @($loadCases[0].lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken })
+            if ($loadLostNodes.Count -eq 0) { throw "UIA_LOAD_LOST_STATE_NOT_OBSERVED:$lang" }
+            $startName = if ($lang -ceq 'EN') { 'Start / Retry (R)' } else { '開始 / 再挑戦 (R)' }
+            $startCases = @($cases | Where-Object { $_.name -ceq $startName })
+            if ($startCases.Count -ne 1) { throw "UIA_START_CASE_NOT_UNIQUE:$lang" }
+            $startLostBefore = @($startCases[0].uia_before | Where-Object { [string]$_ -ceq $lostToken })
+            $playingToken = if ($lang -ceq 'EN') { 'ControlType.Text:PLAYING' } else { 'ControlType.Text:プレイ中' }
+            $startPlayingAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $playingToken })
+            $startLostAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $lostToken })
+            if ($startLostBefore.Count -eq 0) { throw "UIA_START_LOST_PRECONDITION_NOT_OBSERVED:$lang" }
+            if ($startPlayingAfter.Count -eq 0 -or $startLostAfter.Count -gt 0) {
+              throw "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:$lang"
+            }
+          }
+          # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
+          # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $preflight.product_source
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-revision-binding-v1'
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'FAIL_REVISION_NOT_IN_PRODUCT_SOURCE' })
+            required_revision=$requiredRevision
+            product_source=$preflight.product_source
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+            product_acceptance=$revisionIncluded
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/revision-binding.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'REVISION_NOT_IN_PRODUCT_SOURCE' }
+          [pscustomobject]@{
+            schema='signal-sprint-uia-hash-binding-v1'
+            status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            exe_size_bytes=$build.exe_size_bytes
+            artifact_exe_size_bytes=$build.artifact_exe_size_bytes
+            artifact_zip_sha256=$build.artifact_zip_sha256
+            artifact_zip_size_bytes=$build.artifact_zip_size_bytes
+            build_run_url=$build.build_run_url
+            build_receipt_sha256=$preflight.build_receipt_sha256
+            product_source=$preflight.product_source
+            workflow_head=$preflight.workflow_head
+            independent_build_verified=$true
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  gdk-package-readiness:
+    if: always()
+    needs: [cloud-provenance-fixture, completed-build-attestation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      INDEPENDENT_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      PRODUCT_SOURCE_SHA: 1a349faa41663c417c40710140a4d50c79b62b78
+      PR30_SOURCE_SHA: a377043d3c9ab0c71d9a100cdb841dd7000313b9
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact UIA workflow head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact Provisioner PR53 contract as data only
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: provisioner
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download completed-build attestation from this exact UIA run
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/attestation
+      - name: Download read-only GDK SDK capability receipt from the exact completed build run
+        if: always() && env.BUILD_RUN_ID != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/sdk-capability
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.BUILD_RUN_ID }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run GDK package-readiness contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
+      - name: Generate GDK readiness only from completed-build attestation
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
+            --provisioner-checkout provisioner \
+            --factory-checkout factory \
+            --completed-build-attestation evidence/attestation/completed-build-attestation.json \
+            --sdk-capability-receipt evidence/sdk-capability/gdk-sdk-capability.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload completed-run GDK package-readiness receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
+          if-no-files-found: error
+          retention-days: 30
+) { throw 'ATTESTED_BUILD_EXE_SHA_INVALID' }
+          if ($attestedWorkflowHead -cnotmatch '^[a-f0-9]{40}          if ($exeSize -le 0) { throw 'EXE_SIZE_INVALID' }
+          [pscustomobject]@{
+            workflow_head=$head
+            product_source=$productSource
+            pr30_source=$pr30
+            exe_sha256=$actual
+            exe_size_bytes=$exeSize
+            build_receipt_sha256=$receiptFileSha
+            build_run_url=$receipt.build_run_url
+            build_run_id=$buildRunId
+            build_artifact_id=$buildArtifactId
+            build_workflow_head_sha=$receipt.workflow_head_sha
+            provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'
+            gui='NOT_YET_TESTED'
+          } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+      - name: Verify actual GitHub build run artifact and EXE bytes
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXE_PATH: ${{ inputs.exe_path }}
+          BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+        run: |
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json --require-completed-run
+          if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
+      - name: Run JA and EN UIA gate
+        shell: pwsh
+        env:
+          EXE_PATH: ${{ inputs.exe_path }}
+        run: |
+          & ./qa/signal_sprint_uia_dynamic_gate.ps1 -ExePath $env:EXE_PATH -OutputPath evidence/uia-receipt.json
+          if ($LASTEXITCODE -ne 0) { throw "UIA_GATE_FAILED: $LASTEXITCODE" }
+      - name: Bind measured UIA EXE hash to preflight receipt
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $preflight = Get-Content -LiteralPath evidence/preflight-receipt.json -Raw | ConvertFrom-Json
+          $uia = Get-Content -LiteralPath evidence/uia-receipt.json -Raw | ConvertFrom-Json
+          if ($preflight.provenance -cne 'RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED') { throw 'PREFLIGHT_PROVENANCE_UNEXPECTED' }
+          $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
+          if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
+          if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
+          if ([string]$build.workflow_head_sha -cne [string]$preflight.build_workflow_head_sha -or [string]$build.workflow_head_sha -cne [string]$preflight.workflow_head) { throw 'INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH' }
+          if ([long]$build.run_id -ne [long]$preflight.build_run_id -or [long]$build.artifact_id -ne [long]$preflight.build_artifact_id) { throw 'INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH' }
+          if ([string]$build.build_run_url -cne [string]$preflight.build_run_url) { throw 'INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH' }
+          if ([long]$build.exe_size_bytes -ne [long]$preflight.exe_size_bytes -or [long]$build.artifact_exe_size_bytes -ne [long]$preflight.exe_size_bytes) { throw 'INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH' }
+          if ([string]$build.artifact_zip_sha256 -cnotmatch '^[a-f0-9]{64}$' -or [long]$build.artifact_zip_size_bytes -le 0) { throw 'INDEPENDENT_BUILD_ARTIFACT_DIGEST_INVALID' }
+          if ($build.pr30_source_commit -cne $preflight.pr30_source) { throw 'INDEPENDENT_BUILD_PR30_BINDING_MISMATCH' }
+          if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
+          if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
+          if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
+          foreach ($lang in @('EN','JP')) {
+            $cases = @($uia.evidence | Where-Object { $_.language -ceq $lang })
+            if ($cases.Count -ne 5 -or @($cases | Where-Object { $_.side_effect_verified -ne $true }).Count -gt 0) {
+              throw "UIA_LANGUAGE_COVERAGE_OR_SEMANTIC_FAILURE:$lang"
+            }
+            $expectedNames = if ($lang -ceq 'EN') {
+              @('Start / Retry (R)','Undo (U)','Save (Ctrl+S)','Load (L)','日本語 (J)')
+            } else {
+              @('開始 / 再挑戦 (R)','1手戻す (U)','保存 (Ctrl+S)','読込 (L)','English (J)')
+            }
+            $actualNames = @($cases | ForEach-Object { [string]$_.name })
+            if ((@($actualNames | Select-Object -Unique).Count -ne 5) -or
+                ((@($actualNames | Sort-Object) -join [char]0) -cne (@($expectedNames | Sort-Object) -join [char]0))) {
+              throw "UIA_BUTTON_EXACT_SET_OR_DUPLICATE:$lang"
+            }
+            $lostToken = if ($lang -ceq 'EN') { 'ControlType.Text:LOST' } else { 'ControlType.Text:失敗' }
+            $lostCases = @($cases | Where-Object {
+              @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
+            })
+            if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
+            $loadName = if ($lang -ceq 'EN') { 'Load (L)' } else { '読込 (L)' }
+            $loadCases = @($cases | Where-Object { $_.name -ceq $loadName })
+            if ($loadCases.Count -ne 1) { throw "UIA_LOAD_CASE_NOT_UNIQUE:$lang" }
+            $loadLostNodes = @($loadCases[0].lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken })
+            if ($loadLostNodes.Count -eq 0) { throw "UIA_LOAD_LOST_STATE_NOT_OBSERVED:$lang" }
+            $startName = if ($lang -ceq 'EN') { 'Start / Retry (R)' } else { '開始 / 再挑戦 (R)' }
+            $startCases = @($cases | Where-Object { $_.name -ceq $startName })
+            if ($startCases.Count -ne 1) { throw "UIA_START_CASE_NOT_UNIQUE:$lang" }
+            $startLostBefore = @($startCases[0].uia_before | Where-Object { [string]$_ -ceq $lostToken })
+            $playingToken = if ($lang -ceq 'EN') { 'ControlType.Text:PLAYING' } else { 'ControlType.Text:プレイ中' }
+            $startPlayingAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $playingToken })
+            $startLostAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $lostToken })
+            if ($startLostBefore.Count -eq 0) { throw "UIA_START_LOST_PRECONDITION_NOT_OBSERVED:$lang" }
+            if ($startPlayingAfter.Count -eq 0 -or $startLostAfter.Count -gt 0) {
+              throw "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:$lang"
+            }
+          }
+          # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
+          # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
+          $requiredRevision = '9ccd7ff4389b3ca0e45c8407d7369a00f4302cf2'
+          git cat-file -e "$requiredRevision^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'REQUIRED_WIN_LOSE_REVISION_NOT_FOUND' }
+          git merge-base --is-ancestor $requiredRevision $preflight.product_source
+          $revisionIncluded = ($LASTEXITCODE -eq 0)
+          [pscustomobject]@{
+            schema='signal-sprint-revision-binding-v1'
+            status=$(if ($revisionIncluded) { 'PASS_REVISION_INCLUDED' } else { 'FAIL_REVISION_NOT_IN_PRODUCT_SOURCE' })
+            required_revision=$requiredRevision
+            product_source=$preflight.product_source
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+            product_acceptance=$revisionIncluded
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/revision-binding.json -Encoding utf8
+          if (-not $revisionIncluded) { throw 'REVISION_NOT_IN_PRODUCT_SOURCE' }
+          [pscustomobject]@{
+            schema='signal-sprint-uia-hash-binding-v1'
+            status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
+            exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            exe_size_bytes=$build.exe_size_bytes
+            artifact_exe_size_bytes=$build.artifact_exe_size_bytes
+            artifact_zip_sha256=$build.artifact_zip_sha256
+            artifact_zip_size_bytes=$build.artifact_zip_size_bytes
+            build_run_url=$build.build_run_url
+            build_receipt_sha256=$preflight.build_receipt_sha256
+            product_source=$preflight.product_source
+            workflow_head=$preflight.workflow_head
+            independent_build_verified=$true
+            independent_build_run_id=$build.run_id
+            independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
+            physical_gui_receipt_status=$uia.status
+          } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
+      - name: Upload receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-uia-receipt
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  gdk-package-readiness:
+    if: always()
+    needs: [cloud-provenance-fixture, completed-build-attestation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WINDOWS_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      INDEPENDENT_BUILD_RESULT: ${{ needs.completed-build-attestation.result == 'success' && needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' && 'success' || 'failure' }}
+      BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      PRODUCT_SOURCE_SHA: 1a349faa41663c417c40710140a4d50c79b62b78
+      PR30_SOURCE_SHA: a377043d3c9ab0c71d9a100cdb841dd7000313b9
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact UIA workflow head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact Provisioner PR53 contract as data only
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/Repository-Provisioner-game
+          ref: ac4bd6d4fed975dae139a6638b0b7f78e09e6d71
+          path: provisioner
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download completed-build attestation from this exact UIA run
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/attestation
+      - name: Download read-only GDK SDK capability receipt from the exact completed build run
+        if: always() && env.BUILD_RUN_ID != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/sdk-capability
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.BUILD_RUN_ID }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run GDK package-readiness contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_package_readiness.py -v
+      - name: Generate GDK readiness only from completed-build attestation
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_package_readiness.py \
+            --provisioner-checkout provisioner \
+            --factory-checkout factory \
+            --completed-build-attestation evidence/attestation/completed-build-attestation.json \
+            --sdk-capability-receipt evidence/sdk-capability/gdk-sdk-capability.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload completed-run GDK package-readiness receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
+          if-no-files-found: error
+          retention-days: 30
+) { throw 'ATTESTED_BUILD_WORKFLOW_HEAD_INVALID' }
+          $attestedRunId = [long]$attestedRunIdText
+          $attestedArtifactId = [long]$attestedArtifactIdText
+          if ($buildRunId -ne $attestedRunId) { throw 'BUILD_RECEIPT_NOT_ATTESTED_RUN' }
+          if ($buildArtifactId -ne $attestedArtifactId) { throw 'BUILD_RECEIPT_NOT_ATTESTED_ARTIFACT' }
+          if ($actual -ine $attestedExeSha) { throw 'EXE_SHA_NOT_COMPLETED_ATTESTATION_SHA' }
+          if ($attestedWorkflowHead -cne $head -or [string]$receipt.workflow_head_sha -cne $attestedWorkflowHead) { throw 'BUILD_WORKFLOW_HEAD_NOT_ATTESTATION_HEAD' }
           $exeSize = (Get-Item -LiteralPath $env:EXE_PATH).Length
           if ($exeSize -le 0) { throw 'EXE_SIZE_INVALID' }
           [pscustomobject]@{
