@@ -133,6 +133,12 @@ def validate_independent_build_binding(build, preflight):
     assert type(run_id) is int and run_id > 0 and type(build_run_id) is int and build_run_id > 0, "INDEPENDENT_BUILD_RUN_ID_INVALID"
     assert type(artifact_id) is int and artifact_id > 0 and type(build_artifact_id) is int and build_artifact_id > 0, "INDEPENDENT_BUILD_ARTIFACT_ID_INVALID"
     assert build_run_id == run_id and build_artifact_id == artifact_id, "INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH"
+    attested_run_id = preflight.get("attested_build_run_id")
+    attested_artifact_id = preflight.get("attested_build_artifact_id")
+    assert type(attested_run_id) is int and attested_run_id > 0, "ATTESTED_BUILD_RUN_ID_INVALID"
+    assert type(attested_artifact_id) is int and attested_artifact_id > 0, "ATTESTED_BUILD_ARTIFACT_ID_INVALID"
+    assert attested_run_id == run_id, "BUILD_RECEIPT_NOT_ATTESTED_RUN"
+    assert attested_artifact_id == artifact_id, "BUILD_RECEIPT_NOT_ATTESTED_ARTIFACT"
 
     run_url = build.get("build_run_url")
     preflight_run_url = preflight.get("build_run_url")
@@ -145,6 +151,12 @@ def validate_independent_build_binding(build, preflight):
     assert isinstance(build_sha, str) and re.fullmatch(r"[a-fA-F0-9]{64}", build_sha), "INDEPENDENT_BUILD_EXE_SHA_INVALID"
     assert isinstance(preflight_sha, str) and re.fullmatch(r"[a-fA-F0-9]{64}", preflight_sha), "UIA_PREFLIGHT_EXE_SHA_INVALID"
     assert build_sha.lower() == preflight_sha.lower(), "INDEPENDENT_BUILD_UIA_BINDING_MISMATCH"
+    attested_sha = preflight.get("attested_build_exe_sha256")
+    assert isinstance(attested_sha, str) and re.fullmatch(r"[a-f0-9]{64}", attested_sha), "ATTESTED_BUILD_EXE_SHA_INVALID"
+    assert attested_sha.lower() == preflight_sha.lower() == build_sha.lower(), "EXE_SHA_NOT_COMPLETED_ATTESTATION_SHA"
+    attested_head = preflight.get("attested_build_workflow_head_sha")
+    assert isinstance(attested_head, str) and re.fullmatch(r"[a-f0-9]{40}", attested_head), "ATTESTED_BUILD_WORKFLOW_HEAD_INVALID"
+    assert attested_head == workflow_head, "BUILD_WORKFLOW_HEAD_NOT_ATTESTATION_HEAD"
 
     exe_size = build.get("exe_size_bytes")
     preflight_size = preflight.get("exe_size_bytes")
@@ -179,6 +191,10 @@ def assert_independent_build_binding_fixture(results):
         "build_run_url": f"https://github.com/{REPO}/actions/runs/{run_id}",
         "build_run_id": run_id,
         "build_artifact_id": artifact_id,
+        "attested_build_run_id": run_id,
+        "attested_build_artifact_id": artifact_id,
+        "attested_build_exe_sha256": digest,
+        "attested_build_workflow_head_sha": workflow_head,
     }
     build = {
         "status": "PASS_INDEPENDENT_BUILD_ONLY",
@@ -213,6 +229,18 @@ def assert_independent_build_binding_fixture(results):
     wrong_artifact = copy.deepcopy(build)
     wrong_artifact["artifact_id"] += 1
     mutations.append(("wrong build artifact ID", wrong_artifact, preflight))
+    wrong_attested_run = copy.deepcopy(preflight)
+    wrong_attested_run["attested_build_run_id"] += 1
+    mutations.append(("completed attestation run ID mismatch", build, wrong_attested_run))
+    wrong_attested_artifact = copy.deepcopy(preflight)
+    wrong_attested_artifact["attested_build_artifact_id"] += 1
+    mutations.append(("completed attestation artifact ID mismatch", build, wrong_attested_artifact))
+    wrong_attested_sha = copy.deepcopy(preflight)
+    wrong_attested_sha["attested_build_exe_sha256"] = "0" * 64
+    mutations.append(("completed attestation EXE SHA mismatch", build, wrong_attested_sha))
+    wrong_attested_head = copy.deepcopy(preflight)
+    wrong_attested_head["attested_build_workflow_head_sha"] = "d" * 40
+    mutations.append(("completed attestation workflow head mismatch", build, wrong_attested_head))
     wrong_source = copy.deepcopy(build)
     wrong_source["product_source"] = HEAD
     mutations.append(("wrong frozen product source", wrong_source, preflight))
@@ -876,6 +904,24 @@ def run_checks(results):
         "independent artifact ZIP digest receipt": "artifact_zip_sha256=$build.artifact_zip_sha256",
         "independent build workflow-head evidence field": "independent_build_workflow_head_sha=$build.workflow_head_sha",
         "independent build failure": "INDEPENDENT_BUILD_NOT_VERIFIED",
+        "completed attestation run ID output": "ATTESTED_BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}",
+        "completed attestation artifact ID output": "ATTESTED_BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}",
+        "completed attestation EXE SHA output": "ATTESTED_BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}",
+        "completed attestation workflow head output": "ATTESTED_BUILD_WORKFLOW_HEAD_SHA: ${{ needs.completed-build-attestation.outputs.build_workflow_head_sha }}",
+        "receipt must use attested run": "BUILD_RECEIPT_NOT_ATTESTED_RUN",
+        "receipt must use attested artifact": "BUILD_RECEIPT_NOT_ATTESTED_ARTIFACT",
+        "EXE SHA must match completed attestation": "EXE_SHA_NOT_COMPLETED_ATTESTATION_SHA",
+        "workflow head must match completed attestation": "BUILD_WORKFLOW_HEAD_NOT_ATTESTATION_HEAD",
+        "strict verifier expected run ID": "--expected-run-id \"$env:EXPECTED_BUILD_RUN_ID\"",
+        "strict verifier expected workflow head": "--expected-workflow-head \"$env:EXPECTED_BUILD_WORKFLOW_HEAD_SHA\"",
+        "preflight attested run receipt": "attested_build_run_id=$attestedRunId",
+        "preflight attested artifact receipt": "attested_build_artifact_id=$attestedArtifactId",
+        "preflight attested EXE SHA receipt": "attested_build_exe_sha256=$attestedExeSha.ToLowerInvariant()",
+        "preflight attested workflow head receipt": "attested_build_workflow_head_sha=$attestedWorkflowHead",
+        "UIA attested run receipt": "attested_build_run_id=$preflight.attested_build_run_id",
+        "UIA attested artifact receipt": "attested_build_artifact_id=$preflight.attested_build_artifact_id",
+        "UIA attested EXE SHA receipt": "attested_build_exe_sha256=$preflight.attested_build_exe_sha256",
+        "UIA attested workflow head receipt": "attested_build_workflow_head_sha=$preflight.attested_build_workflow_head_sha",
     }
     for label, token in binding_guards.items():
         assert token in windows_job, "WINDOWS_UIA_BINDING_GUARD_MISSING:" + label
@@ -890,7 +936,7 @@ def run_checks(results):
         assert changed != windows_job, "BINDING_MUTATION_NO_EFFECT:" + label
         results.append(negative("Windows binding mutation reject " + label,
                                 lambda candidate=changed: assert_binding_contract(candidate)))
-    assert "signal-sprint-uia-hash-binding-v1" in windows_job, "UIA_BINDING_SCHEMA_MISSING"
+    assert "signal-sprint-uia-hash-binding-v2" in windows_job, "UIA_BINDING_SCHEMA_MISSING"
     assert "path: evidence/" in windows_job, "UIA_BINDING_ARTIFACT_PATH_MISSING"
     assert "PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA" in windows_job, "UIA_INDEPENDENCE_BINDING_MISSING"
     assert "qa/signal_sprint_independent_build_verify.py" in windows_job, "INDEPENDENT_VERIFIER_NOT_EXECUTED"
