@@ -242,7 +242,8 @@ def verify(receipt, exe_path, token, fetch=get, require_completed_run=False, exp
             "expected_workflow_head": expected_workflow_head,
             "build_provenance_verified": True, "independent_build_verified": True,
             "physical_gui_verified": False, "artifact_kind": "EXE_QA_UNSIGNED",
-            "msix_status": "NOT_BUILT", "gdk_package_verified": False}
+            "msix_status": "NOT_BUILT", "gdk_package_verified": False,
+            "product_acceptance": False}
 
 
 def main():
@@ -258,7 +259,9 @@ def main():
                         help="Require the build workflow receipt to use this exact 40-character workflow head.")
     args = parser.parse_args()
     result = {"schema": "signal-sprint-independent-build-v1", "status": "FAIL",
-              "independent_build_verified": False, "physical_gui_verified": False}
+              "independent_build_verified": False, "physical_gui_verified": False,
+              "gdk_package_verified": False, "msix_status": "NOT_BUILT",
+              "product_acceptance": False}
     try:
         token = os.environ.get("GITHUB_TOKEN", "")
         require(bool(token), "GITHUB_TOKEN_MISSING")
