@@ -1179,6 +1179,57 @@ def run_checks(results):
     assert_independent_verifier_with_mock_api(results)
     assert_proof_artifact_verifier_fixture(results)
     assert_build_run_discovery_fixture(results)
+    # Keep the downstream GDK intake check hosted, exact-source, and strictly read-only.
+    # This catches workflow regressions before a new source ref can be promoted.
+    intake_workflow = pathlib.Path(".github/workflows/signal-sprint-windows-uia-evidence.yml").read_text(encoding="utf-8")
+    readiness_job = intake_workflow.split("  gdk-package-readiness:", 1)[1]
+    readiness_contract = {
+        "hosted runner": "runs-on: ubuntu-latest",
+        "always-run evidence": "if: always()",
+        "exact frozen source checkout": "ref: 1a349faa41663c417c40710140a4d50c79b62b78",
+        "isolated source checkout": "path: factory-source",
+        "source-intake mutation suite": "python3 factory/products/signal-sprint/tests/test_gdk_current_source_intake.py -v",
+        "read-only intake entry point": "python3 factory/qa/signal_sprint_gdk_current_source_intake.py",
+        "frozen checkout argument": "--factory-root factory-source",
+        "exact workflow-head argument": '--workflow-head "$GITHUB_SHA"',
+        "completed build receipt input": "--build-attestation evidence/attestation/completed-build-attestation.json",
+        "read-only SDK capability input": "--sdk-capability-receipt evidence/sdk-capability/gdk-sdk-capability.json",
+        "readiness JSON output": "--output evidence/gdk-package-readiness.json",
+        "readiness Artifact name": "name: signal-sprint-gdk-package-readiness",
+        "readiness Artifact path": "path: evidence/gdk-package-readiness.json",
+        "missing readiness evidence is fatal": "if-no-files-found: error",
+    }
+    def assert_gdk_readiness_contract(candidate):
+        for label, token in readiness_contract.items():
+            assert token in candidate, "GDK_READINESS_CONTRACT_MISSING:" + label
+        assert "self-hosted" not in candidate, "GDK_INTAKE_MUST_NOT_ALLOCATE_PHYSICAL_RUNNER"
+        assert "git push" not in candidate and "gh api --method" not in candidate, "GDK_INTAKE_MUST_NOT_MUTATE_REMOTE_STATE"
+    assert_gdk_readiness_contract(readiness_job)
+    for label, token in readiness_contract.items():
+        changed = readiness_job.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
+        assert changed != readiness_job, "GDK_READINESS_MUTATION_NO_EFFECT:" + label
+        results.append(negative(
+            "GDK current-source intake workflow mutation reject " + label,
+            lambda candidate=changed: assert_gdk_readiness_contract(candidate),
+        ))
+    intake_script = pathlib.Path("qa/signal_sprint_gdk_current_source_intake.py").read_text(encoding="utf-8")
+    for token in (
+        '"request_submitted": False',
+        '"cas_write_performed": False',
+        '"sdk_executed": False',
+        '"makepkg_executed": False',
+        '"msixvc2_built": False',
+        '"ordinary_msix_allowed": False',
+        '"central_ledger_modified": False',
+        '"product_source_modified": False',
+        '"pr30_source_modified": False',
+    ):
+        assert token in intake_script, "GDK_INTAKE_READ_ONLY_GUARD_MISSING:" + token
+    assert "git ls-remote --heads FACTORY_URL" in intake_script, "GDK_INTAKE_MUST_READ_LIVE_FACTORY_REFS"
+    results.append({
+        "case": "GDK intake is hosted exact-source read-only request derivation; no submission, CAS, SDK, MSIX, or ledger writes",
+        "result": "PASS_STATIC_ONLY",
+    })
     assert_uia_receipt_fixture(results)
     assert_independent_build_binding_fixture(results)
     # The proof workflow builds only an unsigned pre-GDK EXE from the immutable product source.
@@ -1586,8 +1637,10 @@ def main():
             "independent_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_independent_build_verify.py").read_bytes()).hexdigest(),
             "proof_artifact_verifier_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_proof_artifact_verify.py").read_bytes()).hexdigest(),
             "build_run_discovery_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_completed_build_discovery.py").read_bytes()).hexdigest(),
+            "gdk_current_source_intake_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_gdk_current_source_intake.py").read_bytes()).hexdigest(),
+            "gdk_current_source_intake_test_source_sha256": hashlib.sha256(pathlib.Path("products/signal-sprint/tests/test_gdk_current_source_intake.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v8",
+            "schema": "signal-sprint-cloud-fixture-v9",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
