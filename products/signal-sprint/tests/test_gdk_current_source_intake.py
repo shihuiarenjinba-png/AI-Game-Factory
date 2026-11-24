@@ -130,6 +130,11 @@ class GdkCurrentSourceIntakeTests(unittest.TestCase):
             "game-signal-sprint-" + SOURCE_SHA,
         )
         self.assertEqual(report["remote_factory_refs"]["matching_exact_source_branches"], [])
+        self.assertIn(
+            "CURRENT_SOURCE_REQUEST_NOT_DERIVED:HOLD_FACTORY_SOURCE_REF_NOT_EXACT_FROZEN_SOURCE",
+            report["limitations"],
+        )
+        self.assertNotIn("CURRENT_REQUEST_IS_DRY_RUN_ONLY_AND_NOT_SUBMITTED", report["limitations"])
 
     def test_exact_single_codex_ref_uses_existing_factory_builder(self):
         branch = "codex/signal-sprint-frozen-source-1a349faa"
@@ -144,6 +149,13 @@ class GdkCurrentSourceIntakeTests(unittest.TestCase):
         self.assertEqual(payload["product_type"], "GAME")
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["source_repository"], FACTORY_REPOSITORY)
+        self.assertIn("CURRENT_REQUEST_IS_DRY_RUN_ONLY_AND_NOT_SUBMITTED", report["limitations"])
+        self.assertFalse(any(item.startswith("CURRENT_SOURCE_REQUEST_NOT_DERIVED:") for item in report["limitations"]))
+        self.assertEqual(report["gates"]["source_request_route"]["status"], "CHECK_ONLY")
+        self.assertEqual(
+            report["gates"]["source_request_route"]["reason"],
+            "CHECK_ONLY_REQUEST_DERIVED_NOT_SUBMITTED",
+        )
 
     def test_multiple_exact_refs_are_ambiguous_and_fail_closed(self):
         report = self.run_assess(
