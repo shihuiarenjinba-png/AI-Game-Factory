@@ -67,6 +67,8 @@ jobs:
           EXPECTED_HEAD: ${{ github.sha }}
           ACTIONS_RUN_ID: ${{ github.run_id }}
         run: python3 qa/signal_sprint_cloud_provenance_fixture.py
+      - name: Self-test cloud fixture Artifact verifier
+        run: python3 qa/signal_sprint_cloud_fixture_artifact_verify.py --self-test
       - name: Upload cloud fixture evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -74,6 +76,27 @@ jobs:
           name: signal-sprint-cloud-provenance-fixture
           path: evidence/cloud-provenance-fixture.json
           if-no-files-found: error
+          retention-days: 30
+      - name: Verify uploaded cloud fixture Artifact digest and embedded JSON
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+          ACTIONS_RUN_ID: ${{ github.run_id }}
+          EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          python3 qa/signal_sprint_cloud_fixture_artifact_verify.py \
+            --expected-run-id "$ACTIONS_RUN_ID" \
+            --expected-repository-id "$EXPECTED_REPOSITORY_ID" \
+            --expected-workflow-head "$EXPECTED_HEAD" \
+            --output evidence/cloud-provenance-artifact-verification.json
+      - name: Upload cloud fixture Artifact verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-cloud-provenance-artifact-verification
+          path: evidence/cloud-provenance-artifact-verification.json
+          if-no-files-found: warn
           retention-days: 30
   cloud-revision-hold:
     outputs:

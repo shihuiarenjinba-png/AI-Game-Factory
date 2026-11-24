@@ -1444,6 +1444,75 @@ def run_checks(results):
         results.append(negative("physical UIA runner gate mutation reject " + label,
                                 lambda candidate=changed: assert_runner_gate_contract(candidate)))
     results.append({"case": "physical UIA runner gated by hosted exact-head revision preflight", "result": "PASS_STATIC_ONLY"})
+    # Verify the retained GitHub Artifact bytes and embedded JSON, not only
+    # the in-memory result emitted by the synthetic fixture process.
+    artifact_verifier = pathlib.Path("qa/signal_sprint_cloud_fixture_artifact_verify.py").read_text(encoding="utf-8")
+    artifact_verifier_tokens = {
+        "metadata digest binding": "CLOUD_FIXTURE_ARTIFACT_METADATA_DIGEST_MISMATCH",
+        "downloaded ZIP digest binding": "CLOUD_FIXTURE_ARTIFACT_ZIP_DIGEST_MISMATCH",
+        "exact run binding": "CLOUD_FIXTURE_ARTIFACT_RUN_MISMATCH",
+        "exact workflow-head binding": "CLOUD_FIXTURE_ARTIFACT_HEAD_MISMATCH",
+        "repository binding": "CLOUD_FIXTURE_ARTIFACT_REPOSITORY_MISMATCH",
+        "expired Artifact rejection": "CLOUD_FIXTURE_ARTIFACT_EXPIRED",
+        "exact Artifact member": "CLOUD_FIXTURE_ARTIFACT_MEMBER_MISMATCH",
+        "source-file hash binding": "CLOUD_FIXTURE_SOURCE_HASH_MISMATCH",
+        "JA/EN button and LOST cases": "CLOUD_FIXTURE_REQUIRED_CASE_MISSING",
+        "physical GUI false-claim guard": "CLOUD_FIXTURE_JSON_FALSE_GUI_CLAIM",
+        "independent build false-claim guard": "CLOUD_FIXTURE_JSON_FALSE_BUILD_CLAIM",
+        "product acceptance false-claim guard": "CLOUD_FIXTURE_JSON_PRODUCT_ACCEPTANCE_TRUE",
+        "bounded Artifact download": "MAX_ARTIFACT_BYTES = 8 * 1024 * 1024",
+        "cross-origin token stripping": "SafeRedirectHandler",
+        "verifier self-test": "def self_test():",
+        "verifier self-test mutation rejection": "SELF_TEST_MUTATION_ACCEPTED",
+    }
+    def assert_cloud_fixture_verifier_source(candidate):
+        for label, token in artifact_verifier_tokens.items():
+            assert token in candidate, "CLOUD_FIXTURE_ARTIFACT_VERIFIER_SOURCE_GUARD_MISSING:" + label
+    assert_cloud_fixture_verifier_source(artifact_verifier)
+    for label, token in artifact_verifier_tokens.items():
+        changed = artifact_verifier.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
+        assert changed != artifact_verifier, "CLOUD_FIXTURE_ARTIFACT_VERIFIER_MUTATION_NO_EFFECT:" + label
+        results.append(negative(
+            "cloud fixture Artifact verifier source mutation reject " + label,
+            lambda candidate=changed: assert_cloud_fixture_verifier_source(candidate),
+        ))
+
+    artifact_workflow_tokens = {
+        "verifier self-test": "python3 qa/signal_sprint_cloud_fixture_artifact_verify.py --self-test",
+        "fixture upload": "name: signal-sprint-cloud-provenance-fixture",
+        "fixture upload path": "path: evidence/cloud-provenance-fixture.json",
+        "post-upload exact Artifact verifier": "- name: Verify uploaded cloud fixture Artifact digest and embedded JSON",
+        "always-run verification": "- name: Verify uploaded cloud fixture Artifact digest and embedded JSON\n        if: always()",
+        "GitHub token binding": "GITHUB_TOKEN: \${{ github.token }}",
+        "expected repository binding": "EXPECTED_REPOSITORY_ID: \${{ github.repository_id }}",
+        "expected run binding": '--expected-run-id "$ACTIONS_RUN_ID"',
+        "expected repository CLI binding": '--expected-repository-id "$EXPECTED_REPOSITORY_ID"',
+        "expected workflow-head CLI binding": '--expected-workflow-head "$EXPECTED_HEAD"',
+        "verification receipt path": "--output evidence/cloud-provenance-artifact-verification.json",
+        "verification Artifact upload": "name: signal-sprint-cloud-provenance-artifact-verification",
+        "verification Artifact path": "path: evidence/cloud-provenance-artifact-verification.json",
+        "verification failure evidence policy": "if-no-files-found: warn",
+    }
+    def assert_cloud_fixture_workflow_contract(candidate):
+        fixture_job = candidate.split("  cloud-provenance-fixture:", 1)[1].split("  cloud-revision-hold:", 1)[0]
+        for label, token in artifact_workflow_tokens.items():
+            assert token in fixture_job, "CLOUD_FIXTURE_ARTIFACT_WORKFLOW_GUARD_MISSING:" + label
+    assert_cloud_fixture_workflow_contract(workflow)
+    for label, token in artifact_workflow_tokens.items():
+        changed = workflow.replace(token, "REMOVED_BY_MUTATION_TEST", 1)
+        assert changed != workflow, "CLOUD_FIXTURE_ARTIFACT_WORKFLOW_MUTATION_NO_EFFECT:" + label
+        results.append(negative(
+            "cloud fixture Artifact workflow mutation reject " + label,
+            lambda candidate=changed: assert_cloud_fixture_workflow_contract(candidate),
+        ))
+    results.append({
+        "case": "cloud fixture Artifact verifier source has exact run/head/digest/member/source-hash guards",
+        "result": "PASS_STATIC_ONLY",
+    })
+    results.append({
+        "case": "cloud fixture Artifact verification workflow self-test and upload contract present",
+        "result": "PASS_STATIC_ONLY",
+    })
     assert "runs-on: ubuntu-latest" in cloud_job, "CLOUD_JOB_NOT_HOSTED"
     assert "python3 qa/signal_sprint_cloud_provenance_fixture.py" in cloud_job, "CLOUD_FIXTURE_NOT_EXECUTED"
     assert "if: always()" in cloud_job, "CLOUD_FAILURE_EVIDENCE_NOT_GUARANTEED"
@@ -1642,13 +1711,15 @@ def main():
             "gdk_current_source_intake_source_sha256": hashlib.sha256(pathlib.Path("qa/signal_sprint_gdk_current_source_intake.py").read_bytes()).hexdigest(),
             "gdk_current_source_intake_test_source_sha256": hashlib.sha256(pathlib.Path("products/signal-sprint/tests/test_gdk_current_source_intake.py").read_bytes()).hexdigest(),
             "cloud_build_workflow_source_sha256": hashlib.sha256(pathlib.Path(".github/workflows/signal-sprint-cloud-build-proof.yml").read_bytes()).hexdigest(),
-            "schema": "signal-sprint-cloud-fixture-v9",
+            "schema": "signal-sprint-cloud-fixture-v10",
             "status": status, "failure": failure,
             "product_source": SOURCE, "reference_win_lose_head": HEAD,
             "source_alignment": "UNVERIFIED_DIFFERENT_SOURCE_REFS" if SOURCE != HEAD else "SAME_REF_NOT_BUILD_PROOF",
             "functional_gate": "HOLD_REAL_WINDOWS_UIA",
             "delivery_gate": "HOLD_GDK_PACKAGE",
             "independent_build_verified": False, "physical_gui_verified": False,
+            "gdk_package_verified": False, "product_acceptance": False,
+            "msix_status": "NOT_BUILT",
             "results": results
         }, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Cloud fixture:", status, len(results), "checks; NOT physical GUI or independent build proof")
