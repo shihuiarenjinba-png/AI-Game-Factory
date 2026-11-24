@@ -439,6 +439,20 @@ def assess(factory_root: Path, *, checkout_head: str, origin_url: str,
         if gate["status"] == "HOLD":
             holds.append(name.upper() + ":" + gate["reason"])
 
+    limitations = []
+    if request_generated:
+        limitations.append("CURRENT_REQUEST_IS_DRY_RUN_ONLY_AND_NOT_SUBMITTED")
+    else:
+        limitations.append("CURRENT_SOURCE_REQUEST_NOT_DERIVED:" + ref_status)
+    limitations.extend([
+        "LEGACY_C058_IDENTITY_IS_HISTORICAL_AND_NOT_REBOUND",
+        "NO_CAS_OR_GDK_SDK_EXECUTION_OR_MAKEPKG",
+        "NO_VERSION_OR_ASSET_APPROVAL_OR_MSIXVC2_BUILD",
+        "NO_ORDINARY_MSIX_SUBSTITUTION",
+        "CI_PASS_IS_NOT_PHYSICAL_GUI_PASS",
+        "CENTRAL_LEDGER_36_NOT_MODIFIED",
+    ])
+
     return {
         "schema": "signal-sprint-gdk-current-source-readiness-v1",
         "status": "HOLD_GDK_PACKAGE_PREREQUISITES",
@@ -548,16 +562,7 @@ def assess(factory_root: Path, *, checkout_head: str, origin_url: str,
             "ledger_write_performed": False,
         },
         "missing_or_rejected": sorted(set(holds)),
-        "limitations": [
-            "EXACT_FACTORY_BRANCH_REF_REQUIRED_BEFORE_REQUEST_PAYLOAD_GENERATION",
-            "CURRENT_REQUEST_IS_DRY_RUN_ONLY_AND_NOT_SUBMITTED",
-            "LEGACY_C058_IDENTITY_IS_HISTORICAL_AND_NOT_REBOUND",
-            "NO_CAS_OR_GDK_SDK_EXECUTION_OR_MAKEPKG",
-            "NO_VERSION_OR_ASSET_APPROVAL_OR_MSIXVC2_BUILD",
-            "NO_ORDINARY_MSIX_SUBSTITUTION",
-            "CI_PASS_IS_NOT_PHYSICAL_GUI_PASS",
-            "CENTRAL_LEDGER_36_NOT_MODIFIED",
-        ],
+        "limitations": limitations,
     }
 
 
