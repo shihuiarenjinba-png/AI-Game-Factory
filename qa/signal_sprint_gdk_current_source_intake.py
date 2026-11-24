@@ -178,6 +178,10 @@ def _validate_build_attestation(value, workflow_head_sha: str):
         "physical_gui_verified": False,
         "gdk_package_verified": False,
         "product_acceptance": False,
+        "pr30_ancestry_verified": True,
+        "build_provenance_verified": True,
+        "independent_build_verified": True,
+        "build_proof_artifact_verified": True,
     }
     for key, wanted in expected.items():
         if value.get(key) != wanted:
@@ -190,6 +194,30 @@ def _validate_build_attestation(value, workflow_head_sha: str):
         item = value.get(key)
         if not isinstance(item, str) or not SHA256.fullmatch(item):
             errors.append("BUILD_ATTESTATION_" + key.upper() + "_INVALID")
+    if value.get("artifact_exe_size_bytes") != value.get("exe_size_bytes"):
+        errors.append("BUILD_ATTESTATION_ARTIFACT_EXE_SIZE_MISMATCH")
+    proof_id = value.get("build_proof_artifact_id")
+    if type(proof_id) is not int or proof_id <= 0:
+        errors.append("BUILD_ATTESTATION_PROOF_ARTIFACT_ID_INVALID")
+    if value.get("build_proof_artifact_run_id") != value.get("run_id"):
+        errors.append("BUILD_ATTESTATION_PROOF_ARTIFACT_RUN_MISMATCH")
+    if value.get("build_proof_artifact_workflow_head_sha") != workflow_head_sha:
+        errors.append("BUILD_ATTESTATION_PROOF_ARTIFACT_HEAD_MISMATCH")
+    proof_sha = value.get("build_proof_artifact_zip_sha256")
+    if not isinstance(proof_sha, str) or not SHA256.fullmatch(proof_sha):
+        errors.append("BUILD_ATTESTATION_PROOF_ARTIFACT_ZIP_SHA_INVALID")
+    if value.get("build_proof_artifact_digest") != ("sha256:" + proof_sha if isinstance(proof_sha, str) else None):
+        errors.append("BUILD_ATTESTATION_PROOF_ARTIFACT_DIGEST_MISMATCH")
+    proof_size = value.get("build_proof_artifact_zip_size_bytes")
+    if type(proof_size) is not int or proof_size <= 0:
+        errors.append("BUILD_ATTESTATION_PROOF_ARTIFACT_ZIP_SIZE_INVALID")
+    if value.get("expected_run_id") != str(value.get("run_id")):
+        errors.append("BUILD_ATTESTATION_EXPECTED_RUN_ID_MISMATCH")
+    if value.get("expected_workflow_head") != workflow_head_sha:
+        errors.append("BUILD_ATTESTATION_EXPECTED_WORKFLOW_HEAD_MISMATCH")
+    expected_url = "https://github.com/" + FACTORY_REPOSITORY + "/actions/runs/" + str(value.get("run_id"))
+    if value.get("build_run_url") != expected_url:
+        errors.append("BUILD_ATTESTATION_BUILD_RUN_URL_MISMATCH")
     if errors:
         return {"status": "HOLD_COMPLETED_BUILD_ATTESTATION_MISMATCH",
                 "verified": False, "errors": sorted(set(errors))}
@@ -209,6 +237,14 @@ def _validate_build_attestation(value, workflow_head_sha: str):
         "gdk_package_verified": False,
         "msix_status": "NOT_BUILT",
         "product_acceptance": False,
+        "pr30_ancestry_verified": True,
+        "build_proof_artifact_id": value["build_proof_artifact_id"],
+        "build_proof_artifact_digest": value["build_proof_artifact_digest"],
+        "build_proof_artifact_run_id": value["build_proof_artifact_run_id"],
+        "build_proof_artifact_workflow_head_sha": value["build_proof_artifact_workflow_head_sha"],
+        "build_proof_artifact_zip_sha256": value["build_proof_artifact_zip_sha256"],
+        "build_proof_artifact_zip_size_bytes": value["build_proof_artifact_zip_size_bytes"],
+        "build_run_url": value["build_run_url"],
         "errors": [],
     }
 
@@ -346,6 +382,7 @@ def assess(factory_root: Path, *, checkout_head: str, origin_url: str,
         if ref_status.startswith("HOLD_"):
             holds.append(ref_status)
     else:
+        ref_status = "HOLD_FACTORY_CHECKOUT_INVALID"
         holds.append("FACTORY_REMOTE_REF_CHECK_NOT_ATTEMPTED_CHECKOUT_INVALID")
 
     request_generated = request_payload is not None
@@ -434,6 +471,7 @@ def assess(factory_root: Path, *, checkout_head: str, origin_url: str,
         "request": {
             "candidate_request_id": candidate_request_id,
             "request_id": candidate_request_id if request_generated else None,
+            "source_branch": source_branch,
             "request_generated": request_generated,
             "request_submitted": False,
             "request_payload": request_payload,
@@ -537,11 +575,17 @@ def main(argv=None):
     origin_result = _git(args.factory_root, "remote", "get-url", "origin")
     checkout_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
     origin_url = origin_result.stdout.strip() if origin_result.returncode == 0 else ""
-    remote = subprocess.run(
-        ["git", "ls-remote", "--heads", FACTORY_URL],
-        capture_output=True, text=True, timeout=45, check=False,
-    )
-    remote_ok = remote.returncode == 0
+    try:
+        remote = subprocess.run(
+            ["git", "ls-remote", "--heads", FACTORY_URL],
+            capture_output=True, text=True, timeout=45, check=False,
+        )
+        remote_ok = remote.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        remote = subprocess.CompletedProcess(
+            ["git", "ls-remote", "--heads", FACTORY_URL], 127, "", "FACTORY_REMOTE_REF_LOOKUP_FAILED"
+        )
+        remote_ok = False
     try:
         build = _read_json(args.build_attestation) if args.build_attestation else None
     except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:

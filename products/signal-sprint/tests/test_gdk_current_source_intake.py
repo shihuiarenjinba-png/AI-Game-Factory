@@ -31,6 +31,9 @@ def good_build():
         "status": "PASS_INDEPENDENT_BUILD_ONLY",
         "product_source": SOURCE_SHA,
         "pr30_source_commit": PR30_SOURCE_SHA,
+        "pr30_ancestry_verified": True,
+        "build_provenance_verified": True,
+        "independent_build_verified": True,
         "workflow_head_sha": WORKFLOW_HEAD,
         "run_status_at_verification": "completed",
         "run_conclusion": "success",
@@ -43,6 +46,17 @@ def good_build():
         "run_id": 45355246020,
         "artifact_id": 14901373959,
         "exe_size_bytes": 11453747,
+        "artifact_exe_size_bytes": 11453747,
+        "build_run_url": "https://github.com/" + FACTORY_REPOSITORY + "/actions/runs/45355246020",
+        "expected_run_id": "45355246020",
+        "expected_workflow_head": WORKFLOW_HEAD,
+        "build_proof_artifact_id": 14904564932,
+        "build_proof_artifact_digest": "sha256:1c72b4bd0efd49afad6c5f96fd1c50a29d2ac2139b642232c7279b64ae39a626",
+        "build_proof_artifact_run_id": 45355246020,
+        "build_proof_artifact_workflow_head_sha": WORKFLOW_HEAD,
+        "build_proof_artifact_verified": True,
+        "build_proof_artifact_zip_sha256": "1c72b4bd0efd49afad6c5f96fd1c50a29d2ac2139b642232c7279b64ae39a626",
+        "build_proof_artifact_zip_size_bytes": 2171,
         "artifact_zip_size_bytes": 11203473,
         "exe_sha256": "35df3f636d9d5d8a3ee08b76e0a307ad0b01b1b4a2da8c1d503d300eef8fde83",
         "artifact_zip_sha256": "610711cb410a309dc12affb077246cfda17737bffa56103c50f2a6756cfa7b5d",
@@ -174,6 +188,33 @@ class GdkCurrentSourceIntakeTests(unittest.TestCase):
         self.assertFalse(report["completed_build_attestation"]["verified"])
         self.assertIn("BUILD_ATTESTATION_PRODUCT_SOURCE_MISMATCH",
                       report["completed_build_attestation"]["errors"])
+
+    def test_build_attestation_requires_proof_artifact_bindings(self):
+        build = good_build()
+        build["build_proof_artifact_run_id"] = 1
+        report = self.run_assess(ref("codex/signal-sprint-source"),
+                                 build_attestation=build)
+        self.assertFalse(report["completed_build_attestation"]["verified"])
+        self.assertIn("BUILD_ATTESTATION_PROOF_ARTIFACT_RUN_MISMATCH",
+                      report["completed_build_attestation"]["errors"])
+
+    def test_build_attestation_rejects_unverified_provenance_and_size_drift(self):
+        build = good_build()
+        build["independent_build_verified"] = False
+        build["artifact_exe_size_bytes"] += 1
+        report = self.run_assess(ref("codex/signal-sprint-source"),
+                                 build_attestation=build)
+        self.assertFalse(report["completed_build_attestation"]["verified"])
+        self.assertIn("BUILD_ATTESTATION_INDEPENDENT_BUILD_VERIFIED_MISMATCH",
+                      report["completed_build_attestation"]["errors"])
+        self.assertIn("BUILD_ATTESTATION_ARTIFACT_EXE_SIZE_MISMATCH",
+                      report["completed_build_attestation"]["errors"])
+
+    def test_invalid_checkout_has_explicit_request_hold(self):
+        report = self.run_assess(ref("codex/signal-sprint-source"),
+                                 checkout_head="c" * 40)
+        self.assertEqual(report["request"]["status"], "HOLD_FACTORY_CHECKOUT_INVALID")
+        self.assertIsNone(report["request"]["source_branch"])
 
     def test_sdk_capability_wrong_run_is_rejected(self):
         sdk = good_sdk()
