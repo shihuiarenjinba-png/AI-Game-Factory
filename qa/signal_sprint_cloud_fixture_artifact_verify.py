@@ -116,8 +116,8 @@ def get_limited(url, token):
         ) from exc
 
 
-def fetch_artifact_zip(url, token, fetch, sleep_fn=time.sleep):
-    """Retry only transient GitHub artifact-download visibility/rate-limit failures."""
+def fetch_artifact_response(url, token, fetch, sleep_fn=time.sleep):
+    """Retry transient metadata/download visibility and rate-limit failures only."""
     parsed = urlsplit(url)
     expected_target = f":{parsed.netloc}{parsed.path}"
     retryable_codes = {"404", "429", "500", "502", "503", "504"}
@@ -133,6 +133,16 @@ def fetch_artifact_zip(url, token, fetch, sleep_fn=time.sleep):
             if not retryable or attempt == 5:
                 raise
             sleep_fn(attempt + 1)
+
+
+def fetch_artifact_metadata(url, token, fetch, sleep_fn=time.sleep):
+    """Retry transient 404s when freshly uploaded Artifact metadata is not visible yet."""
+    return fetch_artifact_response(url, token, fetch, sleep_fn=sleep_fn)
+
+
+def fetch_artifact_zip(url, token, fetch, sleep_fn=time.sleep):
+    """Retry transient 404s and rate limits while downloading finalized Artifact bytes."""
+    return fetch_artifact_response(url, token, fetch, sleep_fn=sleep_fn)
 
 
 def source_hashes(source_root):
@@ -243,7 +253,9 @@ def verify(expected_run_id, expected_repository_id, expected_workflow_head,
     artifact_id = positive_int(listed.get("id"), "CLOUD_FIXTURE_ARTIFACT_ID_INVALID")
 
     metadata = json_object(
-        fetch(f"{API}/actions/artifacts/{artifact_id}", token),
+        fetch_artifact_metadata(
+            f"{API}/actions/artifacts/{artifact_id}", token, fetch, sleep_fn=sleep_fn
+        ),
         "CLOUD_FIXTURE_ARTIFACT_METADATA_INVALID",
     )
     require(metadata.get("id") == artifact_id, "CLOUD_FIXTURE_ARTIFACT_ID_MISMATCH")
@@ -380,7 +392,8 @@ def self_test():
             state.clear()
             state.update({"metadata": metadata, "artifacts": [copy.deepcopy(metadata)],
                           "archive": archive, "list_reads": 0, "simulate_listing_race": False,
-                          "simulate_fixture_visibility": False, "zip_reads": 0,
+                          "simulate_fixture_visibility": False, "metadata_reads": 0,
+                          "simulate_metadata_visibility": 0, "zip_reads": 0,
                           "simulate_zip_visibility": 0})
 
         list_url = f"{API}/actions/runs/{run_id}/artifacts?per_page=100"
@@ -397,6 +410,13 @@ def self_test():
                 return json.dumps({"total_count": total,
                                    "artifacts": state["artifacts"]}).encode()
             if url == f"{API}/actions/artifacts/98765":
+                state["metadata_reads"] += 1
+                if state["metadata_reads"] <= state["simulate_metadata_visibility"]:
+                    parsed = urlsplit(url)
+                    raise RuntimeError(
+                        "CLOUD_FIXTURE_ARTIFACT_HTTP_ERROR_404:"
+                        + parsed.netloc + parsed.path
+                    )
                 return json.dumps(state["metadata"]).encode()
             if url == f"{API}/actions/artifacts/98765/zip":
                 state["zip_reads"] += 1
@@ -446,6 +466,12 @@ def self_test():
         state["simulate_fixture_visibility"] = True
         accepted()
         tests += 1
+        reset()
+        state["simulate_metadata_visibility"] = 2
+        accepted()
+        tests += 1
+        rejected("artifact metadata persistent 404", "CLOUD_FIXTURE_ARTIFACT_HTTP_ERROR_404",
+                 lambda: state.update({"simulate_metadata_visibility": 6}))
         reset()
         state["simulate_zip_visibility"] = 2
         accepted()
