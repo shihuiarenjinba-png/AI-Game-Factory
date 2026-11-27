@@ -1288,7 +1288,7 @@ def run_checks(results):
         "cloud push path": "github.event_name == 'push'",
         "independent dependency": "needs: [cloud-provenance-fixture]",
         "exact-head selector invocation": "select_exact_head_build_run(runs, expected_head, repo=repo)",
-        "pinned build workflow ID": "/actions/workflows/427222317/runs",
+        "stable build workflow filename": "/actions/workflows/signal-sprint-cloud-build-proof.yml/runs",
         "exact-head selector helper import": "signal_sprint_completed_build_discovery",
         "build run completion check": 'latest_status == "completed"',
         "physical GUI must remain false": 'receipt.get("physical_gui_verified") is False',
@@ -1345,6 +1345,15 @@ def run_checks(results):
         "completed attestation artifact": "signal-sprint-completed-build-attestation",
         "HOLD receipt on no completed run": "HOLD_BUILD_RUN_NOT_COMPLETED",
     }
+    def assert_stable_build_workflow_endpoint(candidate):
+        assert "/actions/workflows/signal-sprint-cloud-build-proof.yml/runs" in candidate, "BUILD_DISCOVERY_WORKFLOW_FILE_ENDPOINT_MISSING"
+        assert not re.search(r"/actions/workflows/[0-9]+/runs", candidate), "BUILD_DISCOVERY_MUST_NOT_PIN_NUMERIC_WORKFLOW_ID"
+    assert_stable_build_workflow_endpoint(completed_job)
+    results.append({"case": "completed build discovery uses stable workflow file path instead of numeric workflow ID", "result": "PASS_STATIC_ONLY"})
+    results.append(negative(
+        "completed build discovery rejects repository-specific numeric workflow ID",
+        lambda: assert_stable_build_workflow_endpoint(completed_job + '\\napi = "/actions/workflows/427222317/runs"'),
+    ))
     for label, token in completed_job_contract.items():
         assert token in completed_job, "COMPLETED_BUILD_ATTESTATION_CONTRACT_MISSING:" + label
         results.append({"case": "completed build attestation contract " + label, "result": "PASS_STATIC_ONLY"})

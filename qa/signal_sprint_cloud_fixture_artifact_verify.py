@@ -70,6 +70,7 @@ REQUIRED_CASES = {
     "physical UIA runner gated by hosted exact-head revision preflight",
     "cloud fixture Artifact verifier source has exact run/head/digest/member/source-hash guards",
     "cloud fixture Artifact verification workflow self-test and upload contract present",
+    "completed build discovery uses stable workflow file path instead of numeric workflow ID",
 }
 
 

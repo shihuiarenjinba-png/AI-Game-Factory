@@ -222,7 +222,7 @@ jobs:
           repo = "shihuiarenjinba-png/AI-Game-Factory"
           expected_head = os.environ.get("EXPECTED_HEAD", "")
           token = os.environ.get("GITHUB_TOKEN", "")
-          api = "https://api.github.com/repos/" + repo + "/actions/workflows/427222317/runs"
+          api = "https://api.github.com/repos/" + repo + "/actions/workflows/signal-sprint-cloud-build-proof.yml/runs"
           output = os.environ["GITHUB_OUTPUT"]
           if not re.fullmatch(r"[a-f0-9]{40}", expected_head):
               raise SystemExit("EXPECTED_HEAD_INVALID")
