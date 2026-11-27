@@ -1352,7 +1352,7 @@ def run_checks(results):
     results.append({"case": "completed build discovery uses stable workflow file path instead of numeric workflow ID", "result": "PASS_STATIC_ONLY"})
     results.append(negative(
         "completed build discovery rejects repository-specific numeric workflow ID",
-        lambda: assert_stable_build_workflow_endpoint(completed_job + '\napi = "/actions/workflows/427222317/runs"'),
+        lambda: assert_stable_build_workflow_endpoint(completed_job + '\\napi = "/actions/workflows/427222317/runs"'),
     ))
     for label, token in completed_job_contract.items():
         assert token in completed_job, "COMPLETED_BUILD_ATTESTATION_CONTRACT_MISSING:" + label
