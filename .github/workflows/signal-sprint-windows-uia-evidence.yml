@@ -684,6 +684,7 @@ jobs:
       inputs.expected_head == github.sha &&
       inputs.exe_path != '' &&
       inputs.exe_sha256 != '' &&
+      inputs.exe_sha256 == needs.completed-build-attestation.outputs.build_exe_sha256 &&
       inputs.build_receipt_path != '' &&
       needs.cloud-provenance-fixture.result == 'success' &&
       needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' &&

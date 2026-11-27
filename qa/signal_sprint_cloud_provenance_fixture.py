@@ -1409,6 +1409,7 @@ def run_checks(results):
         "completed build attestation result": "needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY'",
         "physical EXE path required": "inputs.exe_path != ''",
         "physical EXE SHA required": "inputs.exe_sha256 != ''",
+        "physical EXE SHA must equal completed attestation": "inputs.exe_sha256 == needs.completed-build-attestation.outputs.build_exe_sha256",
         "physical build receipt required": "inputs.build_receipt_path != ''",
         "revision inclusion gate": "needs.cloud-revision-hold.outputs.revision_included == 'true'",
         "current QA branch gate": "github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123'",
@@ -1422,7 +1423,7 @@ def run_checks(results):
             section = physical_header if label in {
                 "hosted dependency", "fixture result gate", "exact dispatch head", "explicit physical UIA request",
                 "completed build attestation result", "physical EXE path required",
-                "physical EXE SHA required", "physical build receipt required",
+                "physical EXE SHA required", "physical EXE SHA must equal completed attestation", "physical build receipt required",
                 "revision inclusion gate", "current QA branch gate"
             } else revision_section
             assert token in section, "PHYSICAL_UIA_RUNNER_GATE_MISSING:" + label
@@ -1453,6 +1454,7 @@ def run_checks(results):
         results.append(negative("physical UIA runner gate mutation reject " + label,
                                 lambda candidate=changed: assert_runner_gate_contract(candidate)))
     results.append({"case": "physical UIA runner gated by hosted exact-head revision preflight", "result": "PASS_STATIC_ONLY"})
+    results.append({"case": "physical UIA runner requires exact completed-attestation EXE SHA before runner allocation", "result": "PASS_STATIC_ONLY"})
     # Verify the retained GitHub Artifact bytes and embedded JSON, not only
     # the in-memory result emitted by the synthetic fixture process.
     artifact_verifier = pathlib.Path("qa/signal_sprint_cloud_fixture_artifact_verify.py").read_text(encoding="utf-8")
