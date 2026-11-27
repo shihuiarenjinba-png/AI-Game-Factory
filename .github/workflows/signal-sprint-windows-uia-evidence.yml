@@ -1,28 +1,46 @@
 name: Signal Sprint Windows UIA evidence (GDK only)
 on:
   push:
-    branches: [codex/signal-sprint-uia-fixture-20261110]
+    branches:
+      - codex/signal-sprint-uia-fixture-20261110
+      - codex/signal-sprint-cloud-build-proof-20261123
     paths:
       - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_cloud_fixture_artifact_verify.py'
+      - 'qa/signal_sprint_completed_build_discovery.py'
       - 'qa/signal_sprint_independent_build_verify.py'
+      - 'qa/signal_sprint_proof_artifact_verify.py'
+      - 'qa/signal_sprint_uia_dynamic_gate.ps1'
+      - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
+      - 'products/signal-sprint/tests/test_gdk_sdk_capability_probe.py'
+      - 'qa/signal_sprint_gdk_package_readiness.py'
+      - 'qa/signal_sprint_gdk_current_source_intake.py'
+      - 'products/signal-sprint/tests/test_gdk_current_source_intake.py'
+      - 'products/signal-sprint/tests/test_gdk_package_readiness.py'
       - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
+      - '.github/workflows/signal-sprint-cloud-build-proof.yml'
   workflow_dispatch:
     inputs:
       expected_head:
         description: Exact 40-character workflow branch commit SHA to attest before checkout
         required: true
         type: string
+      run_physical_uia:
+        description: Request physical GDK Windows UIA only when every cloud and revision gate passes
+        required: false
+        default: false
+        type: boolean
       exe_path:
         description: Absolute path to independently built Signal Sprint EXE on interactive Windows runner
-        required: true
+        required: false
         type: string
       exe_sha256:
         description: Independently attested SHA256 of EXE
-        required: true
+        required: false
         type: string
       build_receipt_path:
         description: Absolute path to independently produced JSON build receipt (source_commit, exe_sha256, build_run_url)
-        required: true
+        required: false
         type: string
 permissions:
   contents: read
@@ -38,16 +56,20 @@ jobs:
       - name: Assert exact-head cloud checkout
         env:
           EXPECTED_HEAD: ${{ github.sha }}
+          DISPATCH_EXPECTED_HEAD: ${{ inputs.expected_head }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD" || { echo 'CLOUD_EXACT_HEAD_MISMATCH'; exit 1; }
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            test "${{ inputs.expected_head }}" = "$EXPECTED_HEAD" || { echo 'DISPATCH_EXPECTED_HEAD_MISMATCH'; exit 1; }
+            [[ "$DISPATCH_EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]] || { echo 'DISPATCH_EXPECTED_HEAD_INVALID'; exit 1; }
+            test "$DISPATCH_EXPECTED_HEAD" = "$EXPECTED_HEAD" || { echo 'DISPATCH_EXPECTED_HEAD_MISMATCH'; exit 1; }
           fi
       - name: Run synthetic provenance and JA/EN static contract checks
         env:
           EXPECTED_HEAD: ${{ github.sha }}
           ACTIONS_RUN_ID: ${{ github.run_id }}
         run: python3 qa/signal_sprint_cloud_provenance_fixture.py
+      - name: Self-test cloud fixture Artifact verifier
+        run: python3 qa/signal_sprint_cloud_fixture_artifact_verify.py --self-test
       - name: Upload cloud fixture evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -56,7 +78,31 @@ jobs:
           path: evidence/cloud-provenance-fixture.json
           if-no-files-found: error
           retention-days: 30
+      - name: Verify uploaded cloud fixture Artifact digest and embedded JSON
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+          ACTIONS_RUN_ID: ${{ github.run_id }}
+          EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          python3 qa/signal_sprint_cloud_fixture_artifact_verify.py \
+            --expected-run-id "$ACTIONS_RUN_ID" \
+            --expected-repository-id "$EXPECTED_REPOSITORY_ID" \
+            --expected-workflow-head "$EXPECTED_HEAD" \
+            --output evidence/cloud-provenance-artifact-verification.json
+      - name: Upload cloud fixture Artifact verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-cloud-provenance-artifact-verification
+          path: evidence/cloud-provenance-artifact-verification.json
+          if-no-files-found: warn
+          retention-days: 30
   cloud-revision-hold:
+    outputs:
+      revision_included: ${{ steps.preflight.outputs.revision_included }}
+      preflight_status: ${{ steps.preflight.outputs.preflight_status }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -65,12 +111,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Record frozen source revision inclusion before physical UIA
+        id: preflight
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p evidence
           python3 - <<'PY'
           import json
+          import os
           import subprocess
           from pathlib import Path
           source = '1a349faa41663c417c40710140a4d50c79b62b78'
@@ -93,11 +141,15 @@ jobs:
               'product_acceptance': False,
           }
           Path('evidence/cloud-revision-preflight.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('revision_included=' + ('true' if included else 'false') + '\n')
+              output.write('preflight_status=' + result['status'] + '\n')
           if not source_exists or not revision_exists:
               raise SystemExit('MISSING_REQUIRED_GIT_OBJECT')
           if included:
-              raise SystemExit('FIXTURE_EXPECTED_REVISION_MISMATCH_NO_LONGER_PRESENT_REVIEW_FREEZE')
-          print('EXPECTED_PRODUCT_HOLD: frozen source lacks required WIN/LOSE revision; GUI not attested')
+              print('REVISION_INCLUDED: physical UIA may proceed only on explicit exact-head dispatch')
+          else:
+              print('EXPECTED_PRODUCT_HOLD: frozen source lacks required WIN/LOSE revision; GUI not attested')
           PY
       - name: Upload independent revision preflight
         if: always()
@@ -107,9 +159,542 @@ jobs:
           path: evidence/cloud-revision-preflight.json
           if-no-files-found: error
           retention-days: 30
+  completed-build-attestation:
+    needs: [cloud-provenance-fixture]
+    outputs:
+      attestation_status: ${{ steps.publish.outputs.attestation_status }}
+      build_run_id: ${{ steps.publish.outputs.build_run_id }}
+      build_artifact_id: ${{ steps.publish.outputs.build_artifact_id }}
+      build_exe_sha256: ${{ steps.publish.outputs.build_exe_sha256 }}
+      build_workflow_head_sha: ${{ steps.publish.outputs.build_workflow_head_sha }}
+      build_proof_artifact_id: ${{ steps.publish.outputs.build_proof_artifact_id }}
+      build_proof_artifact_digest: ${{ steps.publish.outputs.build_proof_artifact_digest }}
+      build_proof_artifact_zip_sha256: ${{ steps.publish.outputs.build_proof_artifact_zip_sha256 }}
+      build_proof_artifact_zip_size_bytes: ${{ steps.publish.outputs.build_proof_artifact_zip_size_bytes }}
+    if: >-
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.expected_head == github.sha)) &&
+      needs.cloud-provenance-fixture.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact UIA workflow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Initialize completed-build evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/completed-build-attestation.json <<'JSON'
+          {
+            "schema": "signal-sprint-completed-build-attestation-v1",
+            "status": "HOLD_BUILD_RUN_NOT_COMPLETED",
+            "workflow_head_sha": "${{ github.sha }}",
+            "independent_build_verified": false,
+            "physical_gui_verified": false,
+            "gdk_package_verified": false,
+            "msix_status": "NOT_BUILT",
+            "product_acceptance": false
+          }
+          JSON
+      - name: Find exact-head completed cloud build run
+        id: discover
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+          from qa.signal_sprint_completed_build_discovery import select_exact_head_build_run
+
+          repo = "shihuiarenjinba-png/AI-Game-Factory"
+          expected_head = os.environ.get("EXPECTED_HEAD", "")
+          token = os.environ.get("GITHUB_TOKEN", "")
+          api = "https://api.github.com/repos/" + repo + "/actions/workflows/signal-sprint-cloud-build-proof.yml/runs"
+          output = os.environ["GITHUB_OUTPUT"]
+          if not re.fullmatch(r"[a-f0-9]{40}", expected_head):
+              raise SystemExit("EXPECTED_HEAD_INVALID")
+          if not token:
+              raise SystemExit("GITHUB_TOKEN_MISSING")
+
+          last_error = None
+          latest_status = None
+          latest_run_id = None
+          for attempt in range(60):
+              query = urllib.parse.urlencode({
+                  "head_sha": expected_head,
+                  "event": "push",
+                  "per_page": 20,
+              })
+              request = urllib.request.Request(
+                  api + "?" + query,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "signal-sprint-completed-build-attestation",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      payload = json.loads(response.read(2 * 1024 * 1024 + 1))
+                  runs = payload.get("workflow_runs")
+                  if not isinstance(runs, list):
+                      raise ValueError("WORKFLOW_RUNS_INVALID")
+                  run = select_exact_head_build_run(runs, expected_head, repo=repo)
+                  if run is not None:
+                      latest_status = run.get("status")
+                      latest_run_id = run.get("id")
+                      if latest_status == "completed":
+                          if run.get("conclusion") != "success":
+                              discovery = {
+                                  "schema": "signal-sprint-build-run-discovery-v1",
+                                  "status": "FAIL_BUILD_RUN_NOT_SUCCESS",
+                                  "workflow_head_sha": expected_head,
+                                  "build_run_id": latest_run_id,
+                                  "run_status": latest_status,
+                                  "run_conclusion": run.get("conclusion"),
+                              }
+                              Path("evidence/build-run-discovery.json").write_text(
+                                  json.dumps(discovery, indent=2) + "\n", encoding="utf-8"
+                              )
+                              with open(output, "a", encoding="utf-8") as handle:
+                                  handle.write(f"build_run_id={latest_run_id}\n")
+                              raise SystemExit("BUILD_RUN_COMPLETED_NOT_SUCCESS")
+                          repository = run.get("repository")
+                          repository_id = repository.get("id") if isinstance(repository, dict) else None
+                          if type(repository_id) is not int or repository_id <= 0:
+                              raise SystemExit("BUILD_RUN_REPOSITORY_ID_INVALID")
+                          discovery = {
+                              "schema": "signal-sprint-build-run-discovery-v1",
+                              "status": "PASS_COMPLETED_BUILD_RUN_DISCOVERED",
+                              "workflow_head_sha": expected_head,
+                              "build_run_id": latest_run_id,
+                              "repository_id": repository_id,
+                              "run_status": latest_status,
+                              "run_conclusion": run.get("conclusion"),
+                              "run_attempt": run.get("run_attempt"),
+                              "run_url": run.get("html_url"),
+                          }
+                          Path("evidence/build-run-discovery.json").write_text(
+                              json.dumps(discovery, indent=2) + "\n", encoding="utf-8"
+                          )
+                          with open(output, "a", encoding="utf-8") as handle:
+                              handle.write(f"build_run_id={latest_run_id}\n")
+                              handle.write(f"build_repository_id={repository_id}\n")
+                          break
+              except SystemExit:
+                  raise
+              except Exception as exc:
+                  last_error = type(exc).__name__ + ":" + str(exc)[:180]
+              if attempt < 59:
+                  time.sleep(10)
+          else:
+              hold_status = "HOLD_ACTIONS_API_UNAVAILABLE" if last_error else "HOLD_BUILD_RUN_NOT_COMPLETED"
+              hold = {
+                  "schema": "signal-sprint-completed-build-attestation-v1",
+                  "status": hold_status,
+                  "failure_reason": last_error or "NO_COMPLETED_EXACT_HEAD_BUILD_RUN_WITHIN_WAIT_WINDOW",
+                  "workflow_head_sha": expected_head,
+                  "build_run_id": latest_run_id,
+                  "last_observed_run_status": latest_status,
+                  "independent_build_verified": False,
+                  "physical_gui_verified": False,
+                  "gdk_package_verified": False,
+                  "msix_status": "NOT_BUILT",
+              }
+              Path("evidence/completed-build-attestation.json").write_text(
+                  json.dumps(hold, indent=2) + "\n", encoding="utf-8"
+              )
+              Path("evidence/build-run-discovery.json").write_text(
+                  json.dumps({
+                      "schema": "signal-sprint-build-run-discovery-v1",
+                      "status": hold_status,
+                      "workflow_head_sha": expected_head,
+                      "build_run_id": latest_run_id,
+                      "last_observed_run_status": latest_status,
+                      "failure_reason": last_error or "NO_COMPLETED_EXACT_HEAD_BUILD_RUN_WITHIN_WAIT_WINDOW",
+                  }, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+              with open(output, "a", encoding="utf-8") as handle:
+                  handle.write("build_run_id=\n")
+              print(hold_status)
+          PY
+      - name: Discover exact-run build proof Artifact ID with bounded retry
+        id: discover_proof_artifact
+        if: steps.discover.outcome == 'success' && steps.discover.outputs.build_run_id != '' && steps.discover.outputs.build_repository_id != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_REPOSITORY_ID: ${{ steps.discover.outputs.build_repository_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+          from qa.signal_sprint_completed_build_discovery import select_exact_head_build_artifact
+
+          repo = "shihuiarenjinba-png/AI-Game-Factory"
+          run_id = os.environ.get("EXPECTED_BUILD_RUN_ID", "")
+          repository_id = os.environ.get("EXPECTED_REPOSITORY_ID", "")
+          expected_head = os.environ.get("EXPECTED_HEAD", "")
+          token = os.environ.get("GITHUB_TOKEN", "")
+          output = os.environ["GITHUB_OUTPUT"]
+          evidence_path = Path("evidence/build-proof-artifact-discovery.json")
+
+          if not re.fullmatch(r"[1-9][0-9]*", run_id):
+              raise SystemExit("EXPECTED_BUILD_RUN_ID_INVALID")
+          if not re.fullmatch(r"[1-9][0-9]*", repository_id):
+              raise SystemExit("EXPECTED_REPOSITORY_ID_INVALID")
+          if not re.fullmatch(r"[a-f0-9]{40}", expected_head):
+              raise SystemExit("EXPECTED_HEAD_INVALID")
+          if not token:
+              raise SystemExit("GITHUB_TOKEN_MISSING")
+
+          def emit(status, artifact=None, reason=None):
+              record = {
+                  "schema": "signal-sprint-build-proof-artifact-discovery-v1",
+                  "status": status,
+                  "build_run_id": int(run_id),
+                  "repository_id": int(repository_id),
+                  "workflow_head_sha": expected_head,
+                  "artifact_id": artifact.get("id") if artifact else None,
+                  "artifact_name": artifact.get("name") if artifact else None,
+                  "artifact_size_bytes": artifact.get("size_in_bytes") if artifact else None,
+                  "artifact_digest": artifact.get("digest") if artifact else None,
+                  "failure_reason": reason,
+                  "physical_gui_verified": False,
+                  "gdk_package_verified": False,
+              }
+              evidence_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+              with open(output, "a", encoding="utf-8") as handle:
+                  handle.write("proof_artifact_id=" + (str(artifact["id"]) if artifact else "") + "\n")
+                  handle.write("proof_artifact_digest=" + (str(artifact["digest"]) if artifact else "") + "\n")
+              print(status)
+
+          api = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts"
+          last_error = None
+          for attempt in range(30):
+              query = urllib.parse.urlencode({"per_page": 100})
+              request = urllib.request.Request(
+                  api + "?" + query,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "signal-sprint-proof-artifact-discovery",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      payload = json.loads(response.read(2 * 1024 * 1024 + 1))
+                  artifacts = payload.get("artifacts")
+                  if not isinstance(artifacts, list):
+                      raise ValueError("WORKFLOW_ARTIFACTS_INVALID")
+                  try:
+                      artifact = select_exact_head_build_artifact(
+                          artifacts, int(run_id), expected_head, int(repository_id)
+                      )
+                  except ValueError as exc:
+                      emit("FAIL_BUILD_PROOF_ARTIFACT_METADATA_INVALID", reason=str(exc)[:180])
+                      raise SystemExit(str(exc))
+                  if artifact is not None:
+                      emit("PASS_EXACT_RUN_BUILD_PROOF_ARTIFACT_SELECTED", artifact=artifact)
+                      break
+                  last_error = "BUILD_PROOF_ARTIFACT_NOT_VISIBLE"
+              except SystemExit:
+                  raise
+              except Exception as exc:
+                  last_error = type(exc).__name__ + ":" + str(exc)[:180]
+              if attempt < 29:
+                  time.sleep(2)
+          else:
+              status = (
+                  "HOLD_BUILD_PROOF_ARTIFACT_NOT_VISIBLE"
+                  if last_error == "BUILD_PROOF_ARTIFACT_NOT_VISIBLE"
+                  else "HOLD_ACTIONS_API_UNAVAILABLE"
+              )
+              emit(status, reason=last_error or "ARTIFACT_DISCOVERY_TIMEOUT")
+          PY
+      - name: Independently verify exact proof Artifact ZIP bytes and embedded receipts
+        id: verify_proof_artifact
+        if: steps.discover_proof_artifact.outputs.proof_artifact_id != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROOF_ARTIFACT_ID: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
+          PROOF_ARTIFACT_DIGEST: ${{ steps.discover_proof_artifact.outputs.proof_artifact_digest }}
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_REPOSITORY_ID: ${{ steps.discover.outputs.build_repository_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 qa/signal_sprint_proof_artifact_verify.py \
+            --artifact-id "$PROOF_ARTIFACT_ID" \
+            --artifact-digest "$PROOF_ARTIFACT_DIGEST" \
+            --expected-run-id "$EXPECTED_BUILD_RUN_ID" \
+            --expected-repository-id "$EXPECTED_REPOSITORY_ID" \
+            --expected-workflow-head "$EXPECTED_HEAD" \
+            --output evidence/build-proof-artifact-verification.json \
+            --receipt-output evidence/build-proof/build-receipt.json
+      - name: Validate receipt run and workflow head; expose exact EXE artifact ID
+        id: receipt
+        if: steps.verify_proof_artifact.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path("evidence/build-proof/build-receipt.json").read_text(encoding="utf-8")
+          )
+          expected_run = os.environ.get("EXPECTED_BUILD_RUN_ID", "")
+          expected_head = os.environ.get("EXPECTED_HEAD", "")
+          if not re.fullmatch(r"[1-9][0-9]*", expected_run):
+              raise SystemExit("EXPECTED_BUILD_RUN_ID_INVALID")
+          if not re.fullmatch(r"[a-f0-9]{40}", expected_head):
+              raise SystemExit("EXPECTED_HEAD_INVALID")
+          match = re.fullmatch(
+              r"https://github\.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/([1-9][0-9]*)",
+              str(receipt.get("build_run_url", "")),
+          )
+          if not match or match.group(1) != expected_run:
+              raise SystemExit("BUILD_RUN_ID_RECEIPT_MISMATCH")
+          if receipt.get("workflow_head_sha") != expected_head:
+              raise SystemExit("BUILD_WORKFLOW_HEAD_NOT_EXACT_UIA_HEAD")
+          if receipt.get("source_commit") != "1a349faa41663c417c40710140a4d50c79b62b78":
+              raise SystemExit("BUILD_RECEIPT_PRODUCT_SOURCE_MISMATCH")
+          if receipt.get("pr30_source_commit") != "a377043d3c9ab0c71d9a100cdb841dd7000313b9":
+              raise SystemExit("BUILD_RECEIPT_PR30_SOURCE_MISMATCH")
+          artifact_id = receipt.get("artifact_id")
+          if type(artifact_id) is not int or artifact_id <= 0:
+              raise SystemExit("BUILD_ARTIFACT_ID_INVALID")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"artifact_id={artifact_id}\n")
+          PY
+      - name: Download EXE artifact by the receipt's exact artifact ID
+        id: download_exe
+        if: steps.receipt.outcome == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.receipt.outputs.artifact_id }}
+          path: evidence/frozen-source-exe
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.discover.outputs.build_run_id }}
+      - name: Independently verify completed run, build job, artifact digest and EXE SHA
+        id: verify
+        if: always() && steps.discover.outputs.build_run_id != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_BUILD_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 qa/signal_sprint_independent_build_verify.py \
+            --receipt evidence/build-proof/build-receipt.json \
+            --exe evidence/frozen-source-exe/SignalSprint.exe \
+            --output evidence/completed-build-attestation.json \
+            --require-completed-run \
+            --expected-run-id "$EXPECTED_BUILD_RUN_ID" \
+            --expected-workflow-head "$EXPECTED_HEAD"
+      - name: Publish completed build attestation status and exact build bindings
+        id: publish
+        if: always()
+        shell: bash
+        env:
+          PROOF_ARTIFACT_ID: ${{ steps.discover_proof_artifact.outputs.proof_artifact_id }}
+          PROOF_ARTIFACT_DIGEST: ${{ steps.discover_proof_artifact.outputs.proof_artifact_digest }}
+          PROOF_ARTIFACT_RUN_ID: ${{ steps.discover.outputs.build_run_id }}
+          PROOF_ARTIFACT_WORKFLOW_HEAD_SHA: ${{ github.sha }}
+          PROOF_ARTIFACT_VERIFIED: ${{ steps.verify_proof_artifact.outputs.verified }}
+          PROOF_ARTIFACT_ZIP_SHA256: ${{ steps.verify_proof_artifact.outputs.proof_artifact_zip_sha256 }}
+          PROOF_ARTIFACT_ZIP_SIZE_BYTES: ${{ steps.verify_proof_artifact.outputs.proof_artifact_zip_size_bytes }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("evidence/completed-build-attestation.json")
+          receipt = {}
+          outputs = {}
+          proof_verification = {}
+          proof_verification_path = Path("evidence/build-proof-artifact-verification.json")
+          if proof_verification_path.is_file():
+              try:
+                  proof_verification = json.loads(proof_verification_path.read_text(encoding="utf-8"))
+              except (ValueError, OSError):
+                  proof_verification = {}
+          if path.is_file():
+              try:
+                  receipt = json.loads(path.read_text(encoding="utf-8"))
+                  status = str(receipt.get("status") or "HOLD_ATTESTATION_STATUS_MISSING")
+              except (ValueError, OSError):
+                  status = "FAIL_ATTESTATION_RECEIPT_INVALID"
+          else:
+              status = "HOLD_ATTESTATION_RECEIPT_MISSING"
+
+          if status == "PASS_INDEPENDENT_BUILD_ONLY":
+              proof_artifact_id = os.environ.get("PROOF_ARTIFACT_ID", "")
+              proof_artifact_digest = os.environ.get("PROOF_ARTIFACT_DIGEST", "")
+              proof_artifact_run_id = os.environ.get("PROOF_ARTIFACT_RUN_ID", "")
+              proof_artifact_head = os.environ.get("PROOF_ARTIFACT_WORKFLOW_HEAD_SHA", "")
+              proof_artifact_verified = os.environ.get("PROOF_ARTIFACT_VERIFIED", "")
+              proof_artifact_zip_sha256 = os.environ.get("PROOF_ARTIFACT_ZIP_SHA256", "")
+              proof_artifact_zip_size_bytes = os.environ.get("PROOF_ARTIFACT_ZIP_SIZE_BYTES", "")
+              if (
+                  not re.fullmatch(r"[1-9][0-9]*", proof_artifact_id)
+                  or not re.fullmatch(r"sha256:[0-9a-f]{64}", proof_artifact_digest)
+                  or not re.fullmatch(r"[1-9][0-9]*", proof_artifact_run_id)
+                  or not re.fullmatch(r"[a-f0-9]{40}", proof_artifact_head)
+                  or proof_artifact_verified != "true"
+                  or not re.fullmatch(r"[a-f0-9]{64}", proof_artifact_zip_sha256)
+                  or not re.fullmatch(r"[1-9][0-9]*", proof_artifact_zip_size_bytes)
+                  or proof_artifact_zip_sha256 != proof_artifact_digest[7:]
+              ):
+                  status = "HOLD_BUILD_PROOF_ARTIFACT_BINDING_MISSING"
+              else:
+                  receipt["build_proof_artifact_id"] = int(proof_artifact_id)
+                  receipt["build_proof_artifact_digest"] = proof_artifact_digest
+                  receipt["build_proof_artifact_run_id"] = int(proof_artifact_run_id)
+                  receipt["build_proof_artifact_workflow_head_sha"] = proof_artifact_head
+                  receipt["build_proof_artifact_verified"] = True
+                  receipt["build_proof_artifact_zip_sha256"] = proof_artifact_zip_sha256
+                  receipt["build_proof_artifact_zip_size_bytes"] = int(proof_artifact_zip_size_bytes)
+              valid = (
+                  status == "PASS_INDEPENDENT_BUILD_ONLY"
+                  and receipt.get("completed_run_required") is True
+                  and receipt.get("run_status_at_verification") == "completed"
+                  and receipt.get("run_conclusion") == "success"
+                  and receipt.get("independent_build_verified") is True
+                  and receipt.get("build_provenance_verified") is True
+                  and receipt.get("physical_gui_verified") is False
+                  and receipt.get("gdk_package_verified") is False
+                  and receipt.get("msix_status") == "NOT_BUILT"
+                  and receipt.get("product_acceptance") is False
+                  and receipt.get("workflow_head_sha") == os.environ.get("GITHUB_SHA")
+                  and receipt.get("product_source") == "1a349faa41663c417c40710140a4d50c79b62b78"
+                  and receipt.get("pr30_source_commit") == "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
+                  and type(receipt.get("run_id")) is int and receipt["run_id"] > 0
+                  and type(receipt.get("artifact_id")) is int and receipt["artifact_id"] > 0
+                  and isinstance(receipt.get("exe_sha256"), str)
+                  and bool(re.fullmatch(r"[0-9a-f]{64}", receipt["exe_sha256"]))
+                  and type(receipt.get("build_proof_artifact_id")) is int and receipt["build_proof_artifact_id"] > 0
+                  and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt.get("build_proof_artifact_digest") or "")))
+                  and receipt.get("build_proof_artifact_run_id") == receipt.get("run_id")
+                  and receipt.get("build_proof_artifact_workflow_head_sha") == receipt.get("workflow_head_sha")
+                  and receipt.get("build_proof_artifact_verified") is True
+                  and bool(re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("build_proof_artifact_zip_sha256") or "")))
+                  and type(receipt.get("build_proof_artifact_zip_size_bytes")) is int and receipt["build_proof_artifact_zip_size_bytes"] > 0
+                  and receipt.get("build_proof_artifact_zip_sha256") == str(receipt.get("build_proof_artifact_digest"))[7:]
+                  and proof_verification.get("status") == "PASS_PROOF_ARTIFACT_BYTES_VERIFIED"
+                  and proof_verification.get("proof_artifact_id") == receipt.get("build_proof_artifact_id")
+                  and proof_verification.get("proof_artifact_digest") == receipt.get("build_proof_artifact_digest")
+                  and proof_verification.get("proof_artifact_zip_sha256") == receipt.get("build_proof_artifact_zip_sha256")
+                  and proof_verification.get("proof_artifact_zip_size_bytes") == receipt.get("build_proof_artifact_zip_size_bytes")
+                  and proof_verification.get("build_run_id") == receipt.get("run_id")
+                  and proof_verification.get("workflow_head_sha") == receipt.get("workflow_head_sha")
+                  and proof_verification.get("build_artifact_id") == receipt.get("artifact_id")
+                  and proof_verification.get("exe_sha256") == receipt.get("exe_sha256")
+                  and proof_verification.get("exe_size_bytes") == receipt.get("exe_size_bytes")
+                  and isinstance(proof_verification.get("cloud_build_proof"), dict)
+                  and proof_verification["cloud_build_proof"].get("artifact_zip_sha256") == receipt.get("artifact_zip_sha256")
+                  and proof_verification["cloud_build_proof"].get("artifact_zip_size_bytes") == receipt.get("artifact_zip_size_bytes")
+              )
+              if not valid:
+                  if status == "PASS_INDEPENDENT_BUILD_ONLY":
+                      status = "HOLD_COMPLETED_BUILD_ATTESTATION_FIELDS_INVALID"
+              else:
+                  path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+                  outputs = {
+                      "build_run_id": str(receipt["run_id"]),
+                      "build_artifact_id": str(receipt["artifact_id"]),
+                      "build_exe_sha256": receipt["exe_sha256"],
+                      "build_workflow_head_sha": receipt["workflow_head_sha"],
+                      "build_proof_artifact_id": str(receipt["build_proof_artifact_id"]),
+                      "build_proof_artifact_digest": receipt["build_proof_artifact_digest"],
+                      "build_proof_artifact_zip_sha256": receipt["build_proof_artifact_zip_sha256"],
+                      "build_proof_artifact_zip_size_bytes": str(receipt["build_proof_artifact_zip_size_bytes"]),
+                  }
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("attestation_status=" + status + "\n")
+              for key, value in outputs.items():
+                  output.write(key + "=" + value + "\n")
+          print(status)
+          PY
+      - name: Upload completed build attestation and source receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Fail closed on a completed-run or provenance mismatch
+        if: always() && (steps.discover.outcome == 'failure' || steps.discover_proof_artifact.outcome == 'failure' || steps.verify_proof_artifact.outcome == 'failure' || (steps.discover.outputs.build_run_id != '' && steps.verify.outcome != 'success'))
+        shell: bash
+        run: |
+          echo 'COMPLETED_BUILD_ATTESTATION_FAILED'
+          exit 1
+
   bilingual-uia:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/signal-sprint-uia-fixture-20261110'
+    needs: [cloud-provenance-fixture, cloud-revision-hold, completed-build-attestation]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_physical_uia == true &&
+      github.ref == 'refs/heads/codex/signal-sprint-cloud-build-proof-20261123' &&
+      inputs.expected_head == github.sha &&
+      inputs.exe_path != '' &&
+      inputs.exe_sha256 != '' &&
+      inputs.exe_sha256 == needs.completed-build-attestation.outputs.build_exe_sha256 &&
+      inputs.build_receipt_path != '' &&
+      needs.cloud-provenance-fixture.result == 'success' &&
+      needs.completed-build-attestation.outputs.attestation_status == 'PASS_INDEPENDENT_BUILD_ONLY' &&
+      needs.cloud-revision-hold.outputs.revision_included == 'true'
     runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]
+    env:
+      ATTESTED_BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      ATTESTED_BUILD_ARTIFACT_ID: ${{ needs.completed-build-attestation.outputs.build_artifact_id }}
+      ATTESTED_BUILD_EXE_SHA256: ${{ needs.completed-build-attestation.outputs.build_exe_sha256 }}
+      ATTESTED_BUILD_WORKFLOW_HEAD_SHA: ${{ needs.completed-build-attestation.outputs.build_workflow_head_sha }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -180,6 +765,8 @@ jobs:
           $receipt = Get-Content -LiteralPath $env:BUILD_RECEIPT_PATH -Raw | ConvertFrom-Json
           if ($receipt.source_commit -cne $productSource) { throw 'BUILD_SOURCE_MISMATCH' }
           if ($receipt.exe_sha256 -ine $actual) { throw 'BUILD_RECEIPT_EXE_SHA_MISMATCH' }
+          if ([string]$receipt.workflow_head_sha -cnotmatch '^[a-f0-9]{40}$') { throw 'BUILD_WORKFLOW_HEAD_SHA_INVALID' }
+          if ([string]$receipt.workflow_head_sha -cne $head) { throw 'BUILD_WORKFLOW_HEAD_MISMATCH' }
           if ([string]::IsNullOrWhiteSpace($receipt.build_run_url)) { throw 'BUILD_RUN_PROVENANCE_MISSING' }
           $buildRunUrl = [string]$receipt.build_run_url
           $uri = $null
@@ -189,15 +776,56 @@ jobs:
               $uri.AbsolutePath -cnotmatch '^/shihuiarenjinba-png/AI-Game-Factory/actions/runs/[1-9][0-9]*$') {
             throw 'BUILD_RUN_URL_INVALID_OR_UNTRUSTED'
           }
-          [pscustomobject]@{ workflow_head=$head; product_source=$productSource; pr30_source=$pr30; exe_sha256=$actual; build_receipt_sha256=$receiptFileSha; build_run_url=$receipt.build_run_url; provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'; gui='NOT_YET_TESTED' } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
+          $buildRunMatch = [regex]::Match($buildRunUrl, '/actions/runs/([1-9][0-9]*)$')
+          if (-not $buildRunMatch.Success) { throw 'BUILD_RUN_ID_INVALID' }
+          $buildRunId = [long]$buildRunMatch.Groups[1].Value
+          if ($null -eq $receipt.artifact_id) { throw 'BUILD_ARTIFACT_ID_INVALID' }
+          try { $buildArtifactId = [long]$receipt.artifact_id } catch { throw 'BUILD_ARTIFACT_ID_INVALID' }
+          if ($buildArtifactId -le 0) { throw 'BUILD_ARTIFACT_ID_INVALID' }
+          $attestedRunIdText = [string]$env:ATTESTED_BUILD_RUN_ID
+          $attestedArtifactIdText = [string]$env:ATTESTED_BUILD_ARTIFACT_ID
+          $attestedExeSha = [string]$env:ATTESTED_BUILD_EXE_SHA256
+          $attestedWorkflowHead = [string]$env:ATTESTED_BUILD_WORKFLOW_HEAD_SHA
+          if ($attestedRunIdText -cnotmatch '^[1-9][0-9]*$') { throw 'ATTESTED_BUILD_RUN_ID_INVALID' }
+          if ($attestedArtifactIdText -cnotmatch '^[1-9][0-9]*$') { throw 'ATTESTED_BUILD_ARTIFACT_ID_INVALID' }
+          if ($attestedExeSha -cnotmatch '^[a-f0-9]{64}$') { throw 'ATTESTED_BUILD_EXE_SHA_INVALID' }
+          if ($attestedWorkflowHead -cnotmatch '^[a-f0-9]{40}$') { throw 'ATTESTED_BUILD_WORKFLOW_HEAD_INVALID' }
+          $attestedRunId = [long]$attestedRunIdText
+          $attestedArtifactId = [long]$attestedArtifactIdText
+          if ($buildRunId -ne $attestedRunId) { throw 'BUILD_RECEIPT_NOT_ATTESTED_RUN' }
+          if ($buildArtifactId -ne $attestedArtifactId) { throw 'BUILD_RECEIPT_NOT_ATTESTED_ARTIFACT' }
+          if ($actual -ine $attestedExeSha) { throw 'EXE_SHA_NOT_COMPLETED_ATTESTATION_SHA' }
+          if ($attestedWorkflowHead -cne $head -or [string]$receipt.workflow_head_sha -cne $attestedWorkflowHead) { throw 'BUILD_WORKFLOW_HEAD_NOT_ATTESTATION_HEAD' }
+          $exeSize = (Get-Item -LiteralPath $env:EXE_PATH).Length
+          if ($exeSize -le 0) { throw 'EXE_SIZE_INVALID' }
+          [pscustomobject]@{
+            workflow_head=$head
+            product_source=$productSource
+            pr30_source=$pr30
+            exe_sha256=$actual
+            exe_size_bytes=$exeSize
+            build_receipt_sha256=$receiptFileSha
+            attested_build_run_id=$attestedRunId
+            attested_build_artifact_id=$attestedArtifactId
+            attested_build_exe_sha256=$attestedExeSha.ToLowerInvariant()
+            attested_build_workflow_head_sha=$attestedWorkflowHead
+            build_run_url=$receipt.build_run_url
+            build_run_id=$buildRunId
+            build_artifact_id=$buildArtifactId
+            build_workflow_head_sha=$receipt.workflow_head_sha
+            provenance='RECEIPT_MATCHED_NOT_INDEPENDENTLY_VERIFIED'
+            gui='NOT_YET_TESTED'
+          } | ConvertTo-Json | Set-Content evidence/preflight-receipt.json
       - name: Verify actual GitHub build run artifact and EXE bytes
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
           EXE_PATH: ${{ inputs.exe_path }}
           BUILD_RECEIPT_PATH: ${{ inputs.build_receipt_path }}
+          EXPECTED_BUILD_RUN_ID: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+          EXPECTED_BUILD_WORKFLOW_HEAD_SHA: ${{ needs.completed-build-attestation.outputs.build_workflow_head_sha }}
         run: |
-          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json
+          python qa/signal_sprint_independent_build_verify.py --receipt "$env:BUILD_RECEIPT_PATH" --exe "$env:EXE_PATH" --output evidence/independent-build-receipt.json --require-completed-run --expected-run-id "$env:EXPECTED_BUILD_RUN_ID" --expected-workflow-head "$env:EXPECTED_BUILD_WORKFLOW_HEAD_SHA"
           if ($LASTEXITCODE -ne 0) { throw 'INDEPENDENT_BUILD_PROVENANCE_FAILED' }
       - name: Run JA and EN UIA gate
         shell: pwsh
@@ -217,6 +845,12 @@ jobs:
           $build = Get-Content -LiteralPath evidence/independent-build-receipt.json -Raw | ConvertFrom-Json
           if ($build.status -cne 'PASS_INDEPENDENT_BUILD_ONLY' -or $build.independent_build_verified -ne $true) { throw 'INDEPENDENT_BUILD_NOT_VERIFIED' }
           if ([string]$build.exe_sha256 -ine [string]$preflight.exe_sha256 -or $build.product_source -cne $preflight.product_source) { throw 'INDEPENDENT_BUILD_UIA_BINDING_MISMATCH' }
+          if ([string]$build.workflow_head_sha -cne [string]$preflight.build_workflow_head_sha -or [string]$build.workflow_head_sha -cne [string]$preflight.workflow_head) { throw 'INDEPENDENT_BUILD_WORKFLOW_HEAD_MISMATCH' }
+          if ([long]$build.run_id -ne [long]$preflight.build_run_id -or [long]$build.artifact_id -ne [long]$preflight.build_artifact_id) { throw 'INDEPENDENT_BUILD_RUN_ARTIFACT_BINDING_MISMATCH' }
+          if ([string]$build.build_run_url -cne [string]$preflight.build_run_url) { throw 'INDEPENDENT_BUILD_RUN_URL_BINDING_MISMATCH' }
+          if ([long]$build.exe_size_bytes -ne [long]$preflight.exe_size_bytes -or [long]$build.artifact_exe_size_bytes -ne [long]$preflight.exe_size_bytes) { throw 'INDEPENDENT_BUILD_EXE_SIZE_BINDING_MISMATCH' }
+          if ([string]$build.artifact_zip_sha256 -cnotmatch '^[a-f0-9]{64}$' -or [long]$build.artifact_zip_size_bytes -le 0) { throw 'INDEPENDENT_BUILD_ARTIFACT_DIGEST_INVALID' }
+          if ($build.pr30_source_commit -cne $preflight.pr30_source) { throw 'INDEPENDENT_BUILD_PR30_BINDING_MISMATCH' }
           if ($uia.status -cne 'PASS' -or @($uia.evidence).Count -ne 10) { throw 'UIA_NOT_PASS_OR_INCOMPLETE' }
           if ($uia.source_head -cne $preflight.product_source) { throw 'UIA_SOURCE_LABEL_MISMATCH' }
           if ([string]$uia.executable_sha256 -ine [string]$preflight.exe_sha256) { throw 'UIA_EXE_SHA_NOT_PREFLIGHT_SHA' }
@@ -240,6 +874,22 @@ jobs:
               @($_.lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken }).Count -gt 0
             })
             if ($lostCases.Count -eq 0) { throw "UIA_LOCALIZED_LOST_NOT_OBSERVED:$lang" }
+            $loadName = if ($lang -ceq 'EN') { 'Load (L)' } else { '読込 (L)' }
+            $loadCases = @($cases | Where-Object { $_.name -ceq $loadName })
+            if ($loadCases.Count -ne 1) { throw "UIA_LOAD_CASE_NOT_UNIQUE:$lang" }
+            $loadLostNodes = @($loadCases[0].lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken })
+            if ($loadLostNodes.Count -eq 0) { throw "UIA_LOAD_LOST_STATE_NOT_OBSERVED:$lang" }
+            $startName = if ($lang -ceq 'EN') { 'Start / Retry (R)' } else { '開始 / 再挑戦 (R)' }
+            $startCases = @($cases | Where-Object { $_.name -ceq $startName })
+            if ($startCases.Count -ne 1) { throw "UIA_START_CASE_NOT_UNIQUE:$lang" }
+            $startLostBefore = @($startCases[0].uia_before | Where-Object { [string]$_ -ceq $lostToken })
+            $playingToken = if ($lang -ceq 'EN') { 'ControlType.Text:PLAYING' } else { 'ControlType.Text:プレイ中' }
+            $startPlayingAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $playingToken })
+            $startLostAfter = @($startCases[0].uia_after | Where-Object { [string]$_ -ceq $lostToken })
+            if ($startLostBefore.Count -eq 0) { throw "UIA_START_LOST_PRECONDITION_NOT_OBSERVED:$lang" }
+            if ($startPlayingAfter.Count -eq 0 -or $startLostAfter.Count -gt 0) {
+              throw "UIA_START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:$lang"
+            }
           }
           # A genuine build and physical UIA PASS cannot attest to a revision absent from the frozen product source.
           # Keep the physical UIA receipt separate; fail closed on product-level acceptance.
@@ -256,20 +906,31 @@ jobs:
             exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
             independent_build_run_id=$build.run_id
             independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
             physical_gui_receipt_status=$uia.status
             product_acceptance=$revisionIncluded
           } | ConvertTo-Json | Set-Content -LiteralPath evidence/revision-binding.json -Encoding utf8
           if (-not $revisionIncluded) { throw 'REVISION_NOT_IN_PRODUCT_SOURCE' }
           [pscustomobject]@{
-            schema='signal-sprint-uia-hash-binding-v1'
+            schema='signal-sprint-uia-hash-binding-v2'
+            attested_build_run_id=$preflight.attested_build_run_id
+            attested_build_artifact_id=$preflight.attested_build_artifact_id
+            attested_build_exe_sha256=$preflight.attested_build_exe_sha256
+            attested_build_workflow_head_sha=$preflight.attested_build_workflow_head_sha
             status='PASS_HASH_BOUND_INDEPENDENT_BUILD_AND_PHYSICAL_UIA'
             exe_sha256=([string]$preflight.exe_sha256).ToLowerInvariant()
+            exe_size_bytes=$build.exe_size_bytes
+            artifact_exe_size_bytes=$build.artifact_exe_size_bytes
+            artifact_zip_sha256=$build.artifact_zip_sha256
+            artifact_zip_size_bytes=$build.artifact_zip_size_bytes
+            build_run_url=$build.build_run_url
             build_receipt_sha256=$preflight.build_receipt_sha256
             product_source=$preflight.product_source
             workflow_head=$preflight.workflow_head
             independent_build_verified=$true
             independent_build_run_id=$build.run_id
             independent_build_artifact_id=$build.artifact_id
+            independent_build_workflow_head_sha=$build.workflow_head_sha
             physical_gui_receipt_status=$uia.status
           } | ConvertTo-Json | Set-Content -LiteralPath evidence/uia-hash-binding.json -Encoding utf8
       - name: Upload receipts even on failure
@@ -279,4 +940,69 @@ jobs:
           name: signal-sprint-uia-receipt
           path: evidence/
           if-no-files-found: warn
+          retention-days: 30
+
+  gdk-package-readiness:
+    if: always()
+    needs: [cloud-provenance-fixture, completed-build-attestation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact UIA workflow head and full source lineage
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: factory
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact frozen Signal Sprint Factory source for intake derivation
+        uses: actions/checkout@v4
+        with:
+          repository: shihuiarenjinba-png/AI-Game-Factory
+          ref: 1a349faa41663c417c40710140a4d50c79b62b78
+          path: factory-source
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Download completed-build attestation from this exact UIA run
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-completed-build-attestation
+          path: evidence/attestation
+      - name: Download read-only GDK SDK capability receipt from the exact completed build run
+        if: always() && needs.completed-build-attestation.outputs.build_run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/sdk-capability
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.completed-build-attestation.outputs.build_run_id }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run current-source GDK intake mutation and promotion-contract tests
+        shell: bash
+        run: python3 factory/products/signal-sprint/tests/test_gdk_current_source_intake.py -v
+      - name: Generate read-only current-source request and GDK route evidence
+        if: always()
+        shell: bash
+        run: |
+          python3 factory/qa/signal_sprint_gdk_current_source_intake.py \
+            --factory-root factory-source \
+            --workflow-head "$GITHUB_SHA" \
+            --build-attestation evidence/attestation/completed-build-attestation.json \
+            --sdk-capability-receipt evidence/sdk-capability/gdk-sdk-capability.json \
+            --output evidence/gdk-package-readiness.json
+      - name: Upload current-source request and GDK package-readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-package-readiness
+          path: evidence/gdk-package-readiness.json
+          if-no-files-found: error
           retention-days: 30

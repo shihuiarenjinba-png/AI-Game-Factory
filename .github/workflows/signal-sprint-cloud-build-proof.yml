@@ -1,0 +1,368 @@
+name: Signal Sprint frozen-source EXE provenance (GDK package remains HOLD)
+on:
+  push:
+    branches: [codex/signal-sprint-cloud-build-proof-20261123]
+    paths:
+      - '.github/workflows/signal-sprint-cloud-build-proof.yml'
+      - '.github/workflows/signal-sprint-windows-uia-evidence.yml'
+      - 'qa/signal_sprint_cloud_provenance_fixture.py'
+      - 'qa/signal_sprint_cloud_fixture_artifact_verify.py'
+      - 'qa/signal_sprint_completed_build_discovery.py'
+      - 'qa/signal_sprint_uia_dynamic_gate.ps1'
+      - 'qa/signal_sprint_independent_build_verify.py'
+      - 'qa/signal_sprint_gdk_package_readiness.py'
+      - 'qa/signal_sprint_gdk_current_source_intake.py'
+      - 'products/signal-sprint/tests/test_gdk_current_source_intake.py'
+      - 'products/signal-sprint/tests/test_gdk_package_readiness.py'
+      - 'qa/signal_sprint_gdk_sdk_capability_probe.py'
+      - 'products/signal-sprint/tests/test_gdk_sdk_capability_probe.py'
+  workflow_dispatch:
+    inputs:
+      expected_gdk_sdk_version:
+        description: Explicitly reviewed GDK SDK ProductVersion/FileVersion for read-only comparison only
+        required: false
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows-frozen-source-exe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      artifact_id: ${{ steps.upload.outputs['artifact-id'] }}
+      exe_sha256: ${{ steps.hash.outputs.exe_sha256 }}
+      product_source_sha: ${{ steps.source.outputs.product_source_sha }}
+      pr30_source_sha: ${{ steps.source.outputs.pr30_source_sha }}
+    steps:
+      - name: Checkout exact QA workflow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Checkout immutable Signal Sprint product source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: 1a349faa41663c417c40710140a4d50c79b62b78
+          path: frozen-source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test read-only GDK SDK capability probe
+        shell: pwsh
+        run: |
+          python products/signal-sprint/tests/test_gdk_sdk_capability_probe.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'GDK_SDK_CAPABILITY_TESTS_FAILED' }
+      - name: Test current-source GDK intake contract
+        shell: pwsh
+        run: |
+          python products/signal-sprint/tests/test_gdk_current_source_intake.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'CURRENT_SOURCE_GDK_INTAKE_TESTS_FAILED' }
+      - name: Probe installed Windows GDK SDK and MakePkg without executing tools
+        shell: pwsh
+        env:
+          EXPECTED_GDK_SDK_VERSION: ${{ inputs.expected_gdk_sdk_version }}
+        run: |
+          python qa/signal_sprint_gdk_sdk_capability_probe.py --output evidence/gdk-sdk-capability.json --expected-version "$env:EXPECTED_GDK_SDK_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'GDK_SDK_CAPABILITY_PROBE_INTERNAL_FAILURE' }
+      - name: Upload read-only Windows GDK SDK capability receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-capability
+          path: evidence/gdk-sdk-capability.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Assert exact frozen source checkout
+        id: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git -C frozen-source rev-parse HEAD).Trim()
+          if ($actual -cne '1a349faa41663c417c40710140a4d50c79b62b78') {
+            throw 'FROZEN_PRODUCT_SOURCE_MISMATCH'
+          }
+          $pr30 = 'a377043d3c9ab0c71d9a100cdb841dd7000313b9'
+          git -C frozen-source merge-base --is-ancestor $pr30 $actual
+          if ($LASTEXITCODE -ne 0) { throw 'PR30_SOURCE_ANCESTRY_MISMATCH' }
+          "product_source_sha=$actual" >> $env:GITHUB_OUTPUT
+          "pr30_source_sha=$pr30" >> $env:GITHUB_OUTPUT
+      - name: Build unsigned pre-GDK EXE with pinned test and PyInstaller dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $venv = Join-Path $env:RUNNER_TEMP 'signal-sprint-frozen-build'
+          try {
+            python -m venv $venv
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_BUILD_VENV_FAILED' }
+            $venvPython = Join-Path $venv 'Scripts/python.exe'
+            if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) { throw 'FROZEN_BUILD_PYTHON_MISSING' }
+            & $venvPython -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)'
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_BUILD_REQUIRES_PYTHON_312' }
+            & $venvPython -m pip install --disable-pip-version-check 'Pillow==11.3.0' 'pyinstaller==6.16.0'
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_BUILD_DEPENDENCIES_FAILED' }
+            Set-Location frozen-source
+            & $venvPython -m unittest discover -s products/signal-sprint/tests -p 'test_*.py' -v
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_SOURCE_GAME_TESTS_FAILED' }
+            & $venvPython -m PyInstaller --noconfirm --clean --onefile --windowed --name SignalSprint --distpath dist/game --workpath dist/work --specpath dist/spec products/signal-sprint/main.py
+            if ($LASTEXITCODE -ne 0) { throw 'FROZEN_SOURCE_EXE_BUILD_FAILED' }
+            if (-not (Test-Path -LiteralPath 'dist/game/SignalSprint.exe' -PathType Leaf)) { throw 'FROZEN_SOURCE_EXE_MISSING' }
+          } finally {
+            if (Test-Path -LiteralPath $venv) {
+              Remove-Item -LiteralPath $venv -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
+      - name: Hash PE and write embedded build provenance
+        id: hash
+        shell: pwsh
+        env:
+          PRODUCT_SOURCE_SHA: ${{ steps.source.outputs.product_source_sha }}
+          PR30_SOURCE_SHA: ${{ steps.source.outputs.pr30_source_sha }}
+          WORKFLOW_HEAD_SHA: ${{ github.sha }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'frozen-source/dist/game/SignalSprint.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'FROZEN_SOURCE_EXE_MISSING' }
+          $stream = $null
+          try {
+            $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $exe).Path)
+            $mz = [byte[]]::new(2)
+            $read = $stream.Read($mz, 0, 2)
+            if ($stream.Length -lt 100000 -or $read -ne 2 -or $mz[0] -ne 77 -or $mz[1] -ne 90) {
+              throw 'FROZEN_SOURCE_EXE_NOT_PE'
+            }
+          } finally {
+            if ($null -ne $stream) { $stream.Dispose() }
+          }
+          $exeSize = (Get-Item -LiteralPath $exe).Length
+          $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $provenance = [ordered]@{
+            schema = 'signal-sprint-frozen-exe-provenance-v1'
+            source_commit = $env:PRODUCT_SOURCE_SHA
+            pr30_source_commit = $env:PR30_SOURCE_SHA
+            workflow_head_sha = $env:WORKFLOW_HEAD_SHA
+            build_run_id = [long]$env:BUILD_RUN_ID
+            exe_size_bytes = [long]$exeSize
+            exe_sha256 = $sha
+            artifact_kind = 'EXE_QA_UNSIGNED'
+            official_identity = 'HOLD_NOT_REGISTERED'
+            msix_status = 'NOT_BUILT'
+            gdk_package_verified = $false
+            physical_gui_verified = $false
+          }
+          $json = $provenance | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Split-Path $exe -Parent) 'build-provenance.json'),
+            $json + [Environment]::NewLine,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          "exe_sha256=$sha" >> $env:GITHUB_OUTPUT
+          Write-Host "FROZEN_SOURCE_EXE_SHA256=$sha"
+          Write-Host 'GDK_PACKAGE_VERIFIED=false; MSIX=NOT_BUILT; PHYSICAL_GUI=NOT_TESTED'
+      - name: Upload frozen-source unsigned EXE and embedded provenance (not a package)
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-frozen-source-exe-1a349faa41663c417c40710140a4d50c79b62b78
+          path: |
+            frozen-source/dist/game/SignalSprint.exe
+            frozen-source/dist/game/build-provenance.json
+          if-no-files-found: error
+          retention-days: 30
+
+  independent-build:
+    if: always()
+    needs: windows-frozen-source-exe
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      WINDOWS_BUILD_RESULT: ${{ needs.windows-frozen-source-exe.result }}
+      BUILD_RUN_ID: ${{ github.run_id }}
+      BUILD_ARTIFACT_ID: ${{ needs.windows-frozen-source-exe.outputs.artifact_id }}
+      BUILD_EXE_SHA256: ${{ needs.windows-frozen-source-exe.outputs.exe_sha256 }}
+      PRODUCT_SOURCE_SHA: ${{ needs.windows-frozen-source-exe.outputs.product_source_sha }}
+      PR30_SOURCE_SHA: ${{ needs.windows-frozen-source-exe.outputs.pr30_source_sha }}
+      WORKFLOW_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact QA workflow head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Initialize terminal fail-closed evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          build_result = os.environ.get("WINDOWS_BUILD_RESULT", "")
+          status = "HOLD_FROZEN_SOURCE_EXE_BUILD_FAILED" if build_result != "success" else "HOLD_INDEPENDENT_VERIFICATION_INCOMPLETE"
+          Path("evidence/cloud-build-proof.json").write_text(json.dumps({
+              "schema": "signal-sprint-cloud-build-proof-v3",
+              "status": status,
+              "failure_reason": "WINDOWS_BUILD_JOB_NOT_SUCCESS" if build_result != "success" else "VERIFICATION_NOT_COMPLETED",
+              "product_source": "1a349faa41663c417c40710140a4d50c79b62b78",
+              "pr30_source_commit": "a377043d3c9ab0c71d9a100cdb841dd7000313b9",
+              "workflow_head_sha": os.environ.get("WORKFLOW_HEAD_SHA"),
+              "build_run_id": os.environ.get("BUILD_RUN_ID"),
+              "independent_build_verified": False,
+              "build_provenance_verified": False,
+              "physical_gui_verified": False,
+              "gdk_package_verified": False,
+              "msix_status": "NOT_BUILT",
+              "product_acceptance": False
+          }, indent=2) + "\n", encoding="utf-8")
+          PY
+      - name: Download exact Windows build artifact by returned artifact ID
+        id: download
+        if: needs.windows-frozen-source-exe.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.windows-frozen-source-exe.outputs.artifact_id }}
+          path: /tmp/signal-sprint-build
+          merge-multiple: true
+      - name: Create receipt and independently verify run, artifact and EXE bytes
+        if: needs.windows-frozen-source-exe.result == 'success' && steps.download.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          on_verification_error() {
+            local exit_code="$1" failed_line="$2" failed_command="$3"
+            export PROOF_EXIT_CODE="$exit_code" PROOF_FAILED_LINE="$failed_line"
+            export PROOF_FAILED_COMMAND="$failed_command"
+            python3 - <<'PYERR'
+          import json, os
+          from pathlib import Path
+          p = Path("evidence/cloud-build-proof.json")
+          previous = json.loads(p.read_text()) if p.exists() else {}
+          reason = ""
+          result_file = Path("evidence/independent-build-receipt.json")
+          if result_file.exists():
+              try:
+                  reason = str(json.loads(result_file.read_text()).get("error") or "")[:240]
+              except (ValueError, OSError):
+                  pass
+          previous.update({
+              "schema": "signal-sprint-cloud-build-proof-v3",
+              "status": "HOLD_INDEPENDENT_VERIFICATION_FAILED",
+              "failure_exit_code": int(os.environ["PROOF_EXIT_CODE"]),
+              "failure_workflow_line": int(os.environ["PROOF_FAILED_LINE"]),
+              "failure_reason": reason or "COMMAND_FAILED",
+              "failure_command": os.environ.get("PROOF_FAILED_COMMAND", "").replace("\n", " ")[:240],
+              "product_source": "1a349faa41663c417c40710140a4d50c79b62b78",
+              "independent_build_verified": False,
+              "build_provenance_verified": False,
+              "physical_gui_verified": False,
+              "gdk_package_verified": False,
+              "msix_status": "NOT_BUILT",
+              "product_acceptance": False,
+          })
+          p.write_text(json.dumps(previous, indent=2) + "\n")
+          PYERR
+          }
+          trap 'on_verification_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+          python3 - <<'PY'
+          import hashlib, json, os, re
+          from pathlib import Path
+          source = os.environ["PRODUCT_SOURCE_SHA"]
+          pr30_source = os.environ["PR30_SOURCE_SHA"]
+          workflow_head = os.environ["WORKFLOW_HEAD_SHA"]
+          run_id = os.environ["BUILD_RUN_ID"]
+          artifact_id = os.environ["BUILD_ARTIFACT_ID"]
+          expected_sha = os.environ["BUILD_EXE_SHA256"]
+          exe = Path("/tmp/signal-sprint-build/SignalSprint.exe")
+          provenance_path = Path("/tmp/signal-sprint-build/build-provenance.json")
+          if source != "1a349faa41663c417c40710140a4d50c79b62b78": raise SystemExit("BUILD_SOURCE_OUTPUT_MISMATCH")
+          if pr30_source != "a377043d3c9ab0c71d9a100cdb841dd7000313b9": raise SystemExit("PR30_SOURCE_OUTPUT_MISMATCH")
+          if not re.fullmatch(r"[0-9a-f]{40}", workflow_head): raise SystemExit("WORKFLOW_HEAD_INVALID")
+          if not re.fullmatch(r"[1-9][0-9]*", run_id): raise SystemExit("BUILD_RUN_ID_INVALID")
+          if not re.fullmatch(r"[1-9][0-9]*", artifact_id): raise SystemExit("BUILD_ARTIFACT_ID_INVALID")
+          if not re.fullmatch(r"[0-9a-f]{64}", expected_sha): raise SystemExit("BUILD_EXE_SHA_INVALID")
+          if not exe.is_file() or not provenance_path.is_file(): raise SystemExit("DOWNLOADED_BUILD_FILES_MISSING")
+          digest_state = hashlib.sha256()
+          with exe.open("rb") as exe_stream:
+              for chunk in iter(lambda: exe_stream.read(1024 * 1024), b""):
+                  digest_state.update(chunk)
+          digest = digest_state.hexdigest()
+          local_size = exe.stat().st_size
+          if digest != expected_sha: raise SystemExit("WINDOWS_OUTPUT_SHA_MISMATCH")
+          provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+          if provenance.get("source_commit") != source: raise SystemExit("EMBEDDED_SOURCE_MISMATCH")
+          if provenance.get("pr30_source_commit") != pr30_source: raise SystemExit("EMBEDDED_PR30_SOURCE_MISMATCH")
+          if provenance.get("workflow_head_sha") != workflow_head: raise SystemExit("EMBEDDED_WORKFLOW_HEAD_MISMATCH")
+          if provenance.get("build_run_id") != int(run_id): raise SystemExit("EMBEDDED_RUN_ID_MISMATCH")
+          if provenance.get("exe_sha256") != digest: raise SystemExit("EMBEDDED_EXE_SHA_MISMATCH")
+          if provenance.get("exe_size_bytes") != local_size: raise SystemExit("EMBEDDED_EXE_SIZE_MISMATCH")
+          if provenance.get("artifact_kind") != "EXE_QA_UNSIGNED": raise SystemExit("EMBEDDED_ARTIFACT_KIND_MISMATCH")
+          if provenance.get("msix_status") != "NOT_BUILT": raise SystemExit("MSIX_MUST_NOT_BE_BUILT")
+          if provenance.get("gdk_package_verified") is not False: raise SystemExit("GDK_PACKAGE_FALSE_CLAIM")
+          if provenance.get("physical_gui_verified") is not False: raise SystemExit("PHYSICAL_GUI_FALSE_CLAIM")
+          receipt = {
+              "source_commit": source,
+              "pr30_source_commit": pr30_source,
+              "workflow_head_sha": workflow_head,
+              "exe_size_bytes": local_size,
+              "exe_sha256": digest,
+              "build_run_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}",
+              "artifact_id": int(artifact_id),
+              "artifact_exe_path": "SignalSprint.exe",
+              "artifact_provenance_path": "build-provenance.json",
+          }
+          Path("evidence/build-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          PY
+          python3 qa/signal_sprint_independent_build_verify.py --receipt evidence/build-receipt.json --exe /tmp/signal-sprint-build/SignalSprint.exe --output evidence/independent-build-receipt.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("evidence/independent-build-receipt.json").read_text())
+          result.update({
+              "physical_gui_verified": False,
+              "gdk_package_verified": False,
+              "msix_status": "NOT_BUILT",
+              "product_acceptance": False,
+          })
+          Path("evidence/cloud-build-proof.json").write_text(json.dumps(result, indent=2) + "\n")
+          PY
+      - name: Record Windows build failure HOLD
+        if: needs.windows-frozen-source-exe.result != 'success'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("evidence/cloud-build-proof.json")
+          result = json.loads(p.read_text())
+          result["status"] = "HOLD_FROZEN_SOURCE_EXE_BUILD_FAILED"
+          result["failure_reason"] = "WINDOWS_BUILD_JOB_NOT_SUCCESS"
+          p.write_text(json.dumps(result, indent=2) + "\n")
+          PY
+      - name: Record artifact download failure HOLD
+        if: needs.windows-frozen-source-exe.result == 'success' && steps.download.outcome != 'success'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("evidence/cloud-build-proof.json")
+          result = json.loads(p.read_text())
+          result["status"] = "HOLD_ARTIFACT_DOWNLOAD_FAILED"
+          result["failure_reason"] = "DOWNLOAD_ARTIFACT_STEP_NOT_SUCCESS"
+          p.write_text(json.dumps(result, indent=2) + "\n")
+          PY
+      - name: Upload evidence, including HOLD
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-independent-cloud-build-proof
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+# GDK readiness is emitted by the separate UIA workflow after completed-build-attestation.

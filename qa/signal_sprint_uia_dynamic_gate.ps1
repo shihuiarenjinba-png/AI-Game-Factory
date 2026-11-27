@@ -151,14 +151,31 @@ try {
    Remove-Item -LiteralPath $caseHome -Recurse -Force -ErrorAction SilentlyContinue
   }
  }
- # LOST must be positively visible through UIA. A title-only or screenshot-only
- # indication is not sufficient. Do not mark PASS until a deterministic LOST
- # fixture is available and the UIA tree actually exposes the LOST state.
+ # LOST must be observed in the exact Load case, then Start must leave LOST
+ # and expose the localized PLAYING state. Unrelated LOST nodes cannot satisfy this gate.
  foreach ($requiredLanguage in @('EN','JP')) {
-   $lostEvidence = @($receipt.evidence | Where-Object {
-     $_.language -eq $requiredLanguage -and @($_.lost_uia_nodes).Count -gt 0
+   $loadName = if ($requiredLanguage -eq 'EN') { 'Load (L)' } else { '読込 (L)' }
+   $loadEvidence = @($receipt.evidence | Where-Object {
+     $_.language -ceq $requiredLanguage -and $_.name -ceq $loadName
    })
-   if ($lostEvidence.Count -eq 0) { throw "LOST_UIA_NOT_OBSERVED:$requiredLanguage" }
+   if ($loadEvidence.Count -ne 1) { throw "LOAD_UIA_CASE_NOT_UNIQUE:$requiredLanguage" }
+   $lostToken = if ($requiredLanguage -eq 'EN') { 'ControlType.Text:LOST' } else { 'ControlType.Text:失敗' }
+   $loadLost = @($loadEvidence[0].lost_uia_nodes | Where-Object { [string]$_ -ceq $lostToken })
+   if ($loadLost.Count -eq 0) { throw "LOST_UIA_NOT_OBSERVED:$requiredLanguage" }
+
+   $startName = if ($requiredLanguage -eq 'EN') { 'Start / Retry (R)' } else { '開始 / 再挑戦 (R)' }
+   $startEvidence = @($receipt.evidence | Where-Object {
+     $_.language -ceq $requiredLanguage -and $_.name -ceq $startName
+   })
+   if ($startEvidence.Count -ne 1) { throw "START_UIA_CASE_NOT_UNIQUE:$requiredLanguage" }
+   $startLostBefore = @($startEvidence[0].uia_before | Where-Object { [string]$_ -ceq $lostToken })
+   $playingToken = if ($requiredLanguage -eq 'EN') { 'ControlType.Text:PLAYING' } else { 'ControlType.Text:プレイ中' }
+   $startPlayingAfter = @($startEvidence[0].uia_after | Where-Object { [string]$_ -ceq $playingToken })
+   $startLostAfter = @($startEvidence[0].uia_after | Where-Object { [string]$_ -ceq $lostToken })
+   if ($startLostBefore.Count -eq 0) { throw "START_LOST_PRECONDITION_NOT_OBSERVED:$requiredLanguage" }
+   if ($startPlayingAfter.Count -eq 0 -or $startLostAfter.Count -gt 0) {
+     throw "START_LOST_TO_PLAYING_TRANSITION_NOT_OBSERVED:$requiredLanguage"
+   }
  }
  if (@($receipt.evidence).Count -ne 10) { throw 'BILINGUAL_BUTTON_COVERAGE_INCOMPLETE' }
  $receipt.status = 'PASS'
