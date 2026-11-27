@@ -1455,6 +1455,62 @@ def run_checks(results):
                                 lambda candidate=changed: assert_runner_gate_contract(candidate)))
     results.append({"case": "physical UIA runner gated by hosted exact-head revision preflight", "result": "PASS_STATIC_ONLY"})
     results.append({"case": "physical UIA runner requires exact completed-attestation EXE SHA before runner allocation", "result": "PASS_STATIC_ONLY"})
+    # A known functional/revision HOLD must not suppress cloud build attestation
+    # or the read-only GDK delivery-readiness report. These are separate gates:
+    # physical UIA remains fail-closed, while fixable delivery prerequisites are
+    # still inventoried on hosted runners without allocating a GDK desktop.
+    def assert_delivery_gate_separation(candidate):
+        completed_header = candidate.split("  completed-build-attestation:", 1)[1].split("    steps:", 1)[0]
+        readiness_header = candidate.split("  gdk-package-readiness:", 1)[1].split("    steps:", 1)[0]
+        assert "needs: [cloud-provenance-fixture]" in completed_header, "BUILD_ATTESTATION_MUST_DEPEND_ON_CLOUD_FIXTURE_ONLY"
+        assert "cloud-revision-hold" not in completed_header and "bilingual-uia" not in completed_header, "BUILD_ATTESTATION_MUST_NOT_WAIT_FOR_PHYSICAL_UIA"
+        assert "if: always()" in readiness_header, "GDK_READINESS_MUST_RUN_EVEN_WHEN_UPSTREAM_GATE_HOLDS"
+        assert "needs: [cloud-provenance-fixture, completed-build-attestation]" in readiness_header, "GDK_READINESS_DEPENDENCIES_DRIFT"
+        assert "cloud-revision-hold" not in readiness_header and "bilingual-uia" not in readiness_header, "GDK_READINESS_MUST_NOT_WAIT_FOR_PHYSICAL_UIA"
+        assert "runs-on: ubuntu-latest" in readiness_header, "GDK_READINESS_MUST_REMAIN_HOSTED_READ_ONLY"
+    assert_delivery_gate_separation(workflow)
+    results.append({"case": "functional revision HOLD does not block cloud build attestation or hosted GDK delivery readiness", "result": "PASS_STATIC_ONLY"})
+    completed_dependency_mutation = workflow.replace(
+        "needs: [cloud-provenance-fixture]",
+        "needs: [cloud-provenance-fixture, cloud-revision-hold]", 1
+    )
+    results.append(negative(
+        "build attestation must not wait for physical revision HOLD",
+        lambda: assert_delivery_gate_separation(completed_dependency_mutation)
+    ))
+    readiness_revision_mutation = workflow.replace(
+        "needs: [cloud-provenance-fixture, completed-build-attestation]",
+        "needs: [cloud-provenance-fixture, completed-build-attestation, cloud-revision-hold]", 1
+    )
+    results.append(negative(
+        "GDK delivery readiness must not wait for functional revision HOLD",
+        lambda: assert_delivery_gate_separation(readiness_revision_mutation)
+    ))
+    readiness_uia_mutation = workflow.replace(
+        "needs: [cloud-provenance-fixture, completed-build-attestation]",
+        "needs: [cloud-provenance-fixture, completed-build-attestation, bilingual-uia]", 1
+    )
+    results.append(negative(
+        "GDK delivery readiness must not wait for physical bilingual UIA",
+        lambda: assert_delivery_gate_separation(readiness_uia_mutation)
+    ))
+    readiness_always_mutation = workflow.replace(
+        "  gdk-package-readiness:\\n    if: always()",
+        "  gdk-package-readiness:\\n    if: success()", 1
+    )
+    results.append(negative(
+        "GDK delivery readiness must emit HOLD evidence despite upstream failures",
+        lambda: assert_delivery_gate_separation(readiness_always_mutation)
+    ))
+    readiness_runner_mutation = workflow.replace(
+        "  gdk-package-readiness:\\n    if: always()\\n    needs: [cloud-provenance-fixture, completed-build-attestation]\\n    runs-on: ubuntu-latest",
+        "  gdk-package-readiness:\\n    if: always()\\n    needs: [cloud-provenance-fixture, completed-build-attestation]\\n    runs-on: [self-hosted, Windows, interactive-desktop, signal-sprint-gdk]",
+        1
+    )
+    results.append(negative(
+        "GDK delivery readiness must not allocate the physical GDK runner",
+        lambda: assert_delivery_gate_separation(readiness_runner_mutation)
+    ))
     # Verify the retained GitHub Artifact bytes and embedded JSON, not only
     # the in-memory result emitted by the synthetic fixture process.
     artifact_verifier = pathlib.Path("qa/signal_sprint_cloud_fixture_artifact_verify.py").read_text(encoding="utf-8")
